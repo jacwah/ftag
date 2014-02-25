@@ -1,0 +1,35 @@
+ftag -- tag and filter your files
+=================================
+ftag is a command line tool to tag files. It is currently
+in a very early state of development, and supports three
+modes of operation: tagging, filtering, and listing. All
+contribution yields a personal hug from jacwah.
+
+ftag file FILE TAG...
+Add any number of tags to the file FILE.
+
+ftag filter TAG...
+Print all files tagged with one or more of the given tags
+to stdout.
+
+ftag list FILE
+Print all tags associated with the file FILE on stdout.
+
+ftag --help
+Display additional help.
+
+make
+Compile.
+
+make clean
+Remove everything created by make.
+
+.ftagdb
+The SQLite3 database file ftag uses to save tags. On
+startup ftag ascends from the current dir to / looking for
+this file. If it's not found it is created in the current
+directory.
+
+echo 'Jacob Wahlgren jacob.wahlgren@gmail.com jacwah/ftag'
+Print the name and email address of the original author and
+the github repo to stdout.
