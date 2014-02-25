@@ -6,6 +6,8 @@
  * TODO: tag_files: use DISTINCT
  * TODO: Make sql SELECT functions return stuff instead of print
  * TODO: -f force create db
+ * TODO: LOTS OF ERROR CHECKING
+ * TODO: Path normalization
  * 
  */
 
