@@ -1,13 +1,10 @@
 CC = gcc
-CFLAGS = -lsqlite3 -std=c99 -g
+CFLAGS := -lsqlite3 -std=c99 -g $(CFLAGS)
 
 all: ftag
 
-ftag: ftag.o
-	$(CC) ftag.c $(CFLAGS) -o ftag
-	
-ftag.o: ftag.c
-	$(CC) -c ftag.c -o ftag.o $(CFLAGS)
+ftag: ftag.c
+	$(CC) ftag.c -o ftag $(CFLAGS)
 	
 clean:
-	rm *.o ftag
+	rm ftag
