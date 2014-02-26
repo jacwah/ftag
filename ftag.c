@@ -42,6 +42,9 @@
 
 #define PROGRAM_NAME "ftag"
 
+#define SUCCESS 0
+#define ERROR 1
+
 static enum {
 	MODE_NONE,
 	MODE_TAG_FILE,
@@ -79,7 +82,7 @@ static void usage(void)
 	fputs(str, stderr);
 }
 
-/* On the getcwd hack: returns null if path is too long, and is if not "/" */
+/* On the getcwd hack: returns null if path is too long, the only one char path is / */
 static int chdir_to_db(const char *fn)
 {
 	char buf[2];
@@ -95,14 +98,14 @@ static int chdir_to_db(const char *fn)
 			fchdir(startdir);
 			close(startdir);
 			
-			return 1;
+			return ERROR;
 		}
 		
 		chdir("..");
 	}
 	close(startdir);
 	
-	return 0;
+	return SUCCESS;
 }
 
 /*** SQLite wrappers and helpers ***/
@@ -117,11 +120,11 @@ static int prepare_or_reset(sqlite3_stmt **prep, const char *str)
 			exit(1);
 		} else {
 			assert(*prep != NULL);
-			return 0;
+			return SUCCESS;
 		}
 	} else {
 		sqlite3_reset(*prep);
-		return 1;
+		return ERROR;
 	}
 }
 
@@ -137,12 +140,12 @@ int tag_file(const char *file, const char *tag)
 	
 	if (sqlite3_bind_text(sql_prep, 1, file, -1, SQLITE_STATIC) != SQLITE_OK ||
 		sqlite3_bind_text(sql_prep, 2, tag, -1, SQLITE_STATIC) != SQLITE_OK)
-		return 1;
+		return ERROR;
 	
 	if (sqlite3_step(sql_prep) != SQLITE_DONE)
-		return 1;
+		return ERROR;
 	
-	return 0;
+	return SUCCESS;
 }
 
 int filter_tag(const char *tag)
@@ -156,12 +159,12 @@ int filter_tag(const char *tag)
 	prepare_or_reset(&sql_prep, sql_str);
 	
 	if (sqlite3_bind_text(sql_prep, 1, tag, -1, SQLITE_STATIC) != SQLITE_OK)
-		return 1;
+		return ERROR;
 	
 	while (sqlite3_step(sql_prep) == SQLITE_ROW)
 		puts(sqlite3_column_text(sql_prep, 0));
 	
-	return 0;
+	return SUCCESS;
 }
 
 int list_tags(const char *file)
@@ -175,27 +178,28 @@ int list_tags(const char *file)
 	prepare_or_reset(&sql_prep, sql_str);
 	
 	if (sqlite3_bind_text(sql_prep, 1, file, -1, SQLITE_STATIC) != SQLITE_OK)
-		return 1;
+		return ERROR;
 	
 	while (sqlite3_step(sql_prep) == SQLITE_ROW)
 		puts(sqlite3_column_text(sql_prep, 0));
 	
-	return 0;
+	return SUCCESS;
 }
 
 static int init_db(char *fn)
 {
 	static char *init_sql = "CREATE TABLE IF NOT EXISTS Tag (file varchar(256) NOT NULL, tag varchar(256) NOT NULL);"
-							"CREATE UNIQUE INDEX IF NOT EXISTS uq_Tag on Tag (file, tag);";
+	"CREATE UNIQUE INDEX IF NOT EXISTS uq_Tag on Tag (file, tag);";
+	
 	chdir_to_db(fn);
 	
 	if (sqlite3_open(fn, &dbconn) != SQLITE_OK)
-		return 1;
+		return ERROR;
 	
 	if (sqlite3_exec(dbconn, init_sql, NULL, NULL, NULL) != SQLITE_OK)
-		return 1;
+		return ERROR;
 	else
-		return 0;
+		return SUCCESS;
 }
 
 /*** Enter points ***/
@@ -206,16 +210,16 @@ int main_tag_file(int argc, char **argv)
 	
 	if (argc < 2) {
 		usage();
-		return 1;
+		return ERROR;
 	}
 	
 	for (int i = 1; i < argc; i++)
 		if (tag_file(argv[0], argv[i]) != 0) {
 			fprintf(stderr, PROGRAM_NAME ": error tagging file\n");
-			return 1;
+			return ERROR;
 		}
 	
-	return 0;
+	return SUCCESS;
 }
 
 int main_filter(int argc, char **argv)
@@ -224,16 +228,16 @@ int main_filter(int argc, char **argv)
 	
 	if (argc < 1) {
 		usage();
-		return 1;
+		return ERROR;
 	}
 	
 	for (int i = 0; i < argc; i++)
 		if (filter_tag(argv[i]) != 0) {
 			fprintf(stderr, PROGRAM_NAME ": error while filtering tag\n");
-			return 1;
+			return ERROR;
 		}
 		
-	return 0;
+	return SUCCESS;
 }
 
 int main_list(int argc, char **argv)
@@ -242,15 +246,15 @@ int main_list(int argc, char **argv)
 	
 	if (argc != 1) {
 		usage();
-		return 1;
+		return ERROR;
 	}
 	
-	if (list_tags(argv[0]) != 0) {
+	if (list_tags(argv[0]) != SUCCESS) {
 		fprintf(stderr, PROGRAM_NAME ": error while listing tags\n");
-		return 1;
+		return ERROR;
 	}
 	
-	return 0;
+	return SUCCESS;
 }
 	
 int main(int argc, char **argv)
@@ -282,13 +286,13 @@ int main(int argc, char **argv)
 				return 0;
 			default:
 				usage();
-				return 1;
+				return ERROR;
 		}
 	}
 	
 	if (argc - optind < 1) {
 		usage();
-		return 1;
+		return ERROR;
 	}
 	
 	if (strcmp(argv[optind], "file") == 0)
@@ -299,18 +303,25 @@ int main(int argc, char **argv)
 		mode = MODE_LIST;
 	else {
 		usage();
-		return 1;
+		return ERROR;
 	}
 	
 	optind++;
 	
 	if (init_db(dbfilename) != 0) {
 		fprintf(stderr, PROGRAM_NAME ": error: failed to initialize database\n");
-		return 1;
+		return ERROR;
 	}
 	
-	if (verbosity > 0)
-		fprintf(stderr, "choosing db '%s/%s'\n", getcwd(NULL, 0), dbfilename);
+	if (verbosity > 0) {
+		char *cdir = getcwd(NULL, 0);
+		
+		if (cdir != NULL) {
+			fprintf(stderr, "choosing db '%s/%s'\n", cdir, dbfilename);
+			free(cdir);
+		} else
+			return ERROR;
+	}
 	
 	if (mode != MODE_NONE) {
 		int margc = argc - optind;
@@ -325,9 +336,9 @@ int main(int argc, char **argv)
 				return main_list(margc, margv);
 			default:
 				assert(0);
-				return 127;
+				return ERROR;
 		}
 	} else {
-		return 127;
+		return ERROR;
 	}
 }
