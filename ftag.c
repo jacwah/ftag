@@ -25,6 +25,8 @@
  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/***--- Includes ---***/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +36,8 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <sqlite3.h>
+
+/***--- Constants ---***/
 
 #ifndef DB_FILENAME
 #define DB_FILENAME ".ftagdb"
@@ -53,7 +57,7 @@ static enum {
 
 sqlite3 *dbconn = NULL;
 
-/*** Util ***/
+/***--- Util ---***/
 
 static void help(void)
 {
@@ -109,7 +113,7 @@ static int chdir_to_db(const char *fn)
 	return SUCCESS;
 }
 
-/*** SQLite wrappers and helpers ***/
+/***--- SQLite wrappers and helpers ---***/
 
 /* If the stmt is null, prepare it with str, otherwise call reset on it */
 static int prepare_or_reset(sqlite3_stmt **prep, const char *str)
@@ -214,7 +218,7 @@ static int init_db(char *fn, char *dir)
 		return SUCCESS;
 }
 
-/*** Entry points ***/
+/***--- Entry points ---***/
 
 int main_tag_file(int argc, char **argv)
 {
