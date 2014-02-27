@@ -1,5 +1,6 @@
 ftag -- tag and filter your files
 =================================
+
 ftag is a command line tool to tag files. It is currently
 in a very early state of development, and supports three
 modes of operation: tagging, filtering, and listing. All
