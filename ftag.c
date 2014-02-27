@@ -5,7 +5,6 @@
  * 
  * TODO: tag_files: use DISTINCT
  * TODO: Make sql SELECT functions return stuff instead of print
- * TODO: -f force create db
  * TODO: LOTS OF ERROR CHECKING
  * TODO: Path normalization
  * 
@@ -58,15 +57,16 @@ sqlite3 *dbconn = NULL;
 
 static void help(void)
 {
-	static const char *str = "Usage: " PROGRAM_NAME " [-dvh] MODE ARG...\n"
-	"  " PROGRAM_NAME " [-dv] file FILE TAG...\n"
-	"  " PROGRAM_NAME " [-dv] filter TAG...\n"
-	"  " PROGRAM_NAME " [-dv] list FILE\n"
+	static const char *str = "Usage: " PROGRAM_NAME " [-dpvh] MODE ARG...\n"
+	"  " PROGRAM_NAME " [OPTIONS] file FILE TAG...\n"
+	"  " PROGRAM_NAME " [OPTIONS] filter TAG...\n"
+	"  " PROGRAM_NAME " [OPTIONS] list FILE\n"
 	"\n"
 	"Options:\n"
-	"  -d, --database  specify database to use\n"
-	"  -v              increase output verbosity (can be used multiple times)\n"
-	"  --help          show this help\n"
+	"  -d, --database-name  specify database name\n"
+	"  -p, --database-dir   force database directory\n"
+	"  -v                   increase output verbosity (can be used multiple times)\n"
+	"  --help               show this help\n"
 	"\n"
 	"Report bugs to jacob.wahlgren@gmail.com.\n"
 	"This software is licensed under the GNU General public license.\n"
@@ -76,15 +76,16 @@ static void help(void)
 
 static void usage(void)
 {
-	static char *str = "Usage: " PROGRAM_NAME " [-dvh] MODE ARG...\n"
+	static char *str = "Usage: " PROGRAM_NAME " [-dpvh] MODE ARG...\n"
 	"Use '" PROGRAM_NAME " --help' for more info\n";
 	
 	fputs(str, stderr);
 }
 
-/* On the getcwd hack: returns null if path is too long, the only one char path is / */
+/* Ascend to the first directory containing a file fn, or stay at the current dir */
 static int chdir_to_db(const char *fn)
 {
+	// getcwd returns null if path is too long, the only one char path is /
 	char buf[2];
 	int startdir = open(".", O_RDONLY);
 	
@@ -110,6 +111,7 @@ static int chdir_to_db(const char *fn)
 
 /*** SQLite wrappers and helpers ***/
 
+/* If the stmt is null, prepare it with str, otherwise call reset on it */
 static int prepare_or_reset(sqlite3_stmt **prep, const char *str)
 {
 	if (*prep == NULL) {
@@ -186,12 +188,22 @@ int list_tags(const char *file)
 	return SUCCESS;
 }
 
-static int init_db(char *fn)
+/* Open and init a database, or search for DB_FILENAME if (fn == NULL) and with chdir_to_db if (dir == NULL) */
+static int init_db(char *fn, char *dir)
 {
 	static char *init_sql = "CREATE TABLE IF NOT EXISTS Tag (file varchar(256) NOT NULL, tag varchar(256) NOT NULL);"
 	"CREATE UNIQUE INDEX IF NOT EXISTS uq_Tag on Tag (file, tag);";
 	
-	chdir_to_db(fn);
+	if (fn == NULL)
+		fn = DB_FILENAME;
+	
+	if (dir == NULL)
+		chdir_to_db(fn);
+	else
+		if (chdir(dir) != 0) {
+			fprintf(stderr, PROGRAM_NAME ": failed to change to dir '%s'\n", dir);
+			exit(ERROR);
+		}
 	
 	if (sqlite3_open(fn, &dbconn) != SQLITE_OK)
 		return ERROR;
@@ -202,7 +214,7 @@ static int init_db(char *fn)
 		return SUCCESS;
 }
 
-/*** Enter points ***/
+/*** Entry points ***/
 
 int main_tag_file(int argc, char **argv)
 {
@@ -262,11 +274,13 @@ int main(int argc, char **argv)
 	/* Look at git argument parsing for ideas on handling modes etc */
 	int chr = 0;
 	int mode = MODE_NONE;
-	char *dbfilename = DB_FILENAME;
+	char *dbfilename = NULL;
 	int verbosity = 0;
+	char *dbpath = NULL;
 	
 	static struct option longopts[] = {
-		{"database", required_argument, 0, 'd'},
+		{"database-name", required_argument, 0, 'd'},
+		{"database-dir", required_argument, 0, 'p'},
 		{"verbose", no_argument, 0, 'v'},
 		{"help", no_argument, 0, 'h'},
 		{0, 0, 0, 0}
@@ -284,6 +298,9 @@ int main(int argc, char **argv)
 			case 'h':
 				help();
 				return 0;
+			case 'p':
+				dbpath = optarg;
+				break;
 			default:
 				usage();
 				return ERROR;
@@ -308,7 +325,7 @@ int main(int argc, char **argv)
 	
 	optind++;
 	
-	if (init_db(dbfilename) != 0) {
+	if (init_db(dbfilename, dbpath) != 0) {
 		fprintf(stderr, PROGRAM_NAME ": error: failed to initialize database\n");
 		return ERROR;
 	}
