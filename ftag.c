@@ -226,7 +226,7 @@ int main_tag_file(int argc, char **argv)
 	}
 	
 	for (int i = 1; i < argc; i++)
-		if (tag_file(argv[0], argv[i]) != 0) {
+		if (tag_file(argv[0], argv[i]) == ERROR) {
 			fprintf(stderr, PROGRAM_NAME ": error tagging file\n");
 			return ERROR;
 		}
@@ -244,7 +244,7 @@ int main_filter(int argc, char **argv)
 	}
 	
 	for (int i = 0; i < argc; i++)
-		if (filter_tag(argv[i]) != 0) {
+		if (filter_tag(argv[i]) == ERROR) {
 			fprintf(stderr, PROGRAM_NAME ": error while filtering tag\n");
 			return ERROR;
 		}
@@ -261,7 +261,7 @@ int main_list(int argc, char **argv)
 		return ERROR;
 	}
 	
-	if (list_tags(argv[0]) != SUCCESS) {
+	if (list_tags(argv[0]) == ERROR) {
 		fprintf(stderr, PROGRAM_NAME ": error while listing tags\n");
 		return ERROR;
 	}
