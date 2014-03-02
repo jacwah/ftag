@@ -164,15 +164,20 @@ void free_step(step_t *stmt)
 step_t *filter_tag(const char *tag)
 {
 	static const char *sql_str = "SELECT DISTINCT file FROM Tag WHERE tag=?;";
+	static const char *sql_str_all = "SELECT DISTINCT file FROM Tag;";
 	sqlite3_stmt *sql_prep = NULL;
 
 	// Only one statement in the sql, only one call to step
 	assert(strchr(sql_str, ';') == strrchr(sql_str, ';'));
 
-	prepare_or_reset(&sql_prep, sql_str);
+	if (tag == NULL)
+		prepare_or_reset(&sql_prep, sql_str_all);
+	else {
+		prepare_or_reset(&sql_prep, sql_str);
 
-	if (sqlite3_bind_text(sql_prep, 1, tag, -1, SQLITE_STATIC) != SQLITE_OK)
-		return NULL;
+		if (sqlite3_bind_text(sql_prep, 1, tag, -1, SQLITE_STATIC) != SQLITE_OK)
+			return NULL;
+	}
 
 	return (step_t *) sql_prep;
 }
@@ -180,15 +185,20 @@ step_t *filter_tag(const char *tag)
 step_t *list_tags(const char *file)
 {
 	static const char *sql_str = "SELECT DISTINCT tag FROM Tag WHERE file=?;";
+	static const char *sql_str_all = "SELECT DISTINCT tag FROM Tag;";
 	sqlite3_stmt *sql_prep = NULL;
 
 	// Only one statement in the sql, only one call to step
 	assert(strchr(sql_str, ';') == strrchr(sql_str, ';'));
 
-	prepare_or_reset(&sql_prep, sql_str);
+	if (file == NULL)
+		prepare_or_reset(&sql_prep, sql_str_all);
+	else {
+		prepare_or_reset(&sql_prep, sql_str);
 
-	if (sqlite3_bind_text(sql_prep, 1, file, -1, SQLITE_STATIC) != SQLITE_OK)
-		return NULL;
+		if (sqlite3_bind_text(sql_prep, 1, file, -1, SQLITE_STATIC) != SQLITE_OK)
+			return NULL;
+	}
 
 	return (step_t *) sql_prep;
 }
@@ -244,13 +254,22 @@ static int main_filter(int argc, char **argv)
 {
 	assert(argv != NULL);
 
-	if (argc < 1) {
-		usage();
-		return ERROR;
+	if (argc == 0) {
+		step_t *step = NULL;
+
+		if ((step = filter_tag(NULL)) == NULL) {
+			fprintf(stderr, PROGRAM_NAME ": error while filtering tag\n");
+			return ERROR;
+		} else {
+			const char *str = NULL;
+
+			while ((str = step_result(step)) != NULL)
+				puts(str);
+		}
 	}
 
 	for (int i = 0; i < argc; i++) {
-		step_t *step;
+		step_t *step = NULL;
 
 		if ((step = filter_tag(argv[i])) == NULL) {
 			fprintf(stderr, PROGRAM_NAME ": error while filtering tag\n");
@@ -274,12 +293,7 @@ static int main_list(int argc, char **argv)
 
 	assert(argv != NULL);
 
-	if (argc != 1) {
-		usage();
-		return ERROR;
-	}
-
-	if ((step = list_tags(argv[0])) == NULL) {
+	if ((step = list_tags(argc ? argv[0] : NULL)) == NULL) {
 		fprintf(stderr, PROGRAM_NAME ": error while listing tags\n");
 		free_step(step);
 
