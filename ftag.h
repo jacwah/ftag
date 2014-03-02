@@ -29,6 +29,7 @@ typedef struct sqlite3_stmt step_t;
 
 extern int tag_file(const char *file, const char *tag);
 extern const char *step_result(step_t *stmt);
+extern void free_step(step_t *stmt);
 extern step_t *filter_tag(const char *tag);
 extern step_t *list_tags(const char *file);
 extern int init_db(char *fn, char *dir);

@@ -156,16 +156,21 @@ const char *step_result(step_t *stmt)
 		return NULL;
 }
 
+void free_step(step_t *stmt)
+{
+	sqlite3_finalize(stmt);
+}
+
 step_t *filter_tag(const char *tag)
 {
-	static sqlite3_stmt *sql_prep = NULL;
 	static const char *sql_str = "SELECT DISTINCT file FROM Tag WHERE tag=?;";
+	sqlite3_stmt *sql_prep = NULL;
 
 	// Only one statement in the sql, only one call to step
 	assert(strchr(sql_str, ';') == strrchr(sql_str, ';'));
 
 	prepare_or_reset(&sql_prep, sql_str);
-	
+
 	if (sqlite3_bind_text(sql_prep, 1, tag, -1, SQLITE_STATIC) != SQLITE_OK)
 		return NULL;
 
@@ -174,8 +179,8 @@ step_t *filter_tag(const char *tag)
 
 step_t *list_tags(const char *file)
 {
-	static sqlite3_stmt *sql_prep = NULL;
 	static const char *sql_str = "SELECT DISTINCT tag FROM Tag WHERE file=?;";
+	sqlite3_stmt *sql_prep = NULL;
 
 	// Only one statement in the sql, only one call to step
 	assert(strchr(sql_str, ';') == strrchr(sql_str, ';'));
@@ -228,6 +233,7 @@ static int main_tag_file(int argc, char **argv)
 	for (int i = 1; i < argc; i++)
 		if (tag_file(argv[0], argv[i]) == ERROR) {
 			fprintf(stderr, PROGRAM_NAME ": error tagging file\n");
+
 			return ERROR;
 		}
 
@@ -255,6 +261,8 @@ static int main_filter(int argc, char **argv)
 			while ((str = step_result(step)) != NULL)
 				puts(str);
 		}
+
+		free_step(step);
 	}
 
 	return SUCCESS;
@@ -273,6 +281,8 @@ static int main_list(int argc, char **argv)
 
 	if ((step = list_tags(argv[0])) == NULL) {
 		fprintf(stderr, PROGRAM_NAME ": error while listing tags\n");
+		free_step(step);
+
 		return ERROR;
 	} else {
 		const char *str = NULL;
@@ -280,6 +290,7 @@ static int main_list(int argc, char **argv)
 		while((str = step_result(step)) != NULL)
 			puts(str);
 	}
+	free_step(step);
 
 	return SUCCESS;
 }
@@ -292,7 +303,7 @@ int main(int argc, char **argv)
 	char *dbfilename = NULL;
 	int verbosity = 0;
 	char *dbpath = NULL;
-	
+
 	static struct option longopts[] = {
 		{"database-name", required_argument, 0, 'd'},
 		{"database-dir", required_argument, 0, 'p'},
@@ -300,7 +311,7 @@ int main(int argc, char **argv)
 		{"help", no_argument, 0, 'h'},
 		{0, 0, 0, 0}
 	};
-	
+
 	opterr = 0;
 	while ((chr = getopt_long(argc, argv, "d:v", longopts, NULL)) != -1) {
 		switch (chr) {
@@ -321,12 +332,12 @@ int main(int argc, char **argv)
 				return ERROR;
 		}
 	}
-	
+
 	if (argc - optind < 1) {
 		usage();
 		return ERROR;
 	}
-	
+
 	if (strcmp(argv[optind], "file") == 0)
 		mode = MODE_TAG_FILE;
 	else if (strcmp(argv[optind], "filter") == 0)
@@ -337,14 +348,14 @@ int main(int argc, char **argv)
 		usage();
 		return ERROR;
 	}
-	
+
 	optind++;
-	
+
 	if (init_db(dbfilename, dbpath) != 0) {
 		fprintf(stderr, PROGRAM_NAME ": error: failed to initialize database\n");
 		return ERROR;
 	}
-	
+
 	if (verbosity > 0) {
 		char *cdir = getcwd(NULL, 0);
 		
@@ -354,7 +365,7 @@ int main(int argc, char **argv)
 		} else
 			return ERROR;
 	}
-	
+
 	if (mode != MODE_NONE) {
 		int margc = argc - optind;
 		char **margv = argv + optind;
