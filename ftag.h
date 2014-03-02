@@ -1,6 +1,5 @@
 /*
  * ftag -- tag your files
- * 
  * Copyright 2014 Jacob Wahlgren
  * 
  */

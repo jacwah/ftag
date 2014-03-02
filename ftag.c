@@ -1,11 +1,6 @@
 /*
- * ftag -- tag and filter your files
- * 
+ * ftag -- tag your files
  * Copyright 2014 Jacob Wahlgren
- * 
- * TODO: tag_files: use DISTINCT
- * TODO: LOTS OF ERROR CHECKING
- * TODO: Path normalization
  * 
  */
 
