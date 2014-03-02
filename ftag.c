@@ -54,7 +54,7 @@ static enum {
 	MODE_LIST
 };
 
-sqlite3 *dbconn = NULL;
+static sqlite3 *dbconn = NULL;
 
 /***--- Util ---***/
 
