@@ -145,13 +145,15 @@ int tag_file(const char *file, const char *tag)
 	if (sqlite3_step(sql_prep) != SQLITE_DONE)
 		return ERROR;
 
+	sqlite3_finalize(sql_prep);
+
 	return SUCCESS;
 }
 
 const char *step_result(step_t *stmt)
 {
 	if (sqlite3_step(stmt) == SQLITE_ROW)
-		return sqlite3_column_text(stmt, 0);
+		return (char *) sqlite3_column_text(stmt, 0);
 	else
 		return NULL;
 }
@@ -209,6 +211,9 @@ int init_db(char *fn, char *dir)
 	static char *init_sql = "CREATE TABLE IF NOT EXISTS Tag (file varchar(256) NOT NULL, tag varchar(256) NOT NULL);"
 	"CREATE UNIQUE INDEX IF NOT EXISTS uq_Tag on Tag (file, tag);";
 
+	if (dbconn != NULL)
+		return ERROR;
+
 	if (fn == NULL)
 		fn = DB_FILENAME;
 
@@ -228,6 +233,13 @@ int init_db(char *fn, char *dir)
 	else
 		return SUCCESS;
 }
+
+static void close_db(void)
+{
+	if (dbconn != NULL)
+		sqlite3_close(dbconn);
+}
+
 
 /***--- Entry points ---***/
 
@@ -266,6 +278,8 @@ static int main_filter(int argc, char **argv)
 			while ((str = step_result(step)) != NULL)
 				puts(str);
 		}
+
+		free_step(step);
 	}
 
 	for (int i = 0; i < argc; i++) {
@@ -366,9 +380,11 @@ int main(int argc, char **argv)
 	optind++;
 
 	if (init_db(dbfilename, dbpath) != 0) {
+		close_db();
 		fprintf(stderr, PROGRAM_NAME ": error: failed to initialize database\n");
 		return ERROR;
-	}
+	} else
+		atexit(close_db);
 
 	if (verbosity > 0) {
 		char *cdir = getcwd(NULL, 0);
@@ -376,8 +392,11 @@ int main(int argc, char **argv)
 		if (cdir != NULL) {
 			fprintf(stderr, "choosing db '%s/%s'\n", cdir, dbfilename);
 			free(cdir);
-		} else
+		} else {
+			close_db();
+
 			return ERROR;
+		}
 	}
 
 	if (mode != MODE_NONE) {
@@ -395,7 +414,6 @@ int main(int argc, char **argv)
 				assert(0);
 				return ERROR;
 		}
-	} else {
+	} else
 		return ERROR;
-	}
 }
