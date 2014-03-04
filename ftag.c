@@ -34,7 +34,7 @@
 #include <sqlite3.h>
 #include "ftag.h"
 
-/***--- Constants ---***/
+/***--- Constants and globals ---***/
 
 #ifndef DB_FILENAME
 #define DB_FILENAME ".ftagdb"
@@ -48,6 +48,14 @@ static enum {
 	MODE_FILTER,
 	MODE_LIST
 };
+
+/* The prepcache is a linked list of prepared statements freed atexit by close_db */
+struct prepcache_node {
+	sqlite3_stmt *stmt;
+	struct prepcache_node *next;
+};
+
+struct prepcache_node *prepcache = NULL;
 
 static sqlite3 *dbconn = NULL;
 
@@ -109,29 +117,64 @@ static int chdir_to_db(const char *fn)
 
 /***--- SQLite wrappers and helpers ---***/
 
-/* If the stmt is null, prepare it with str, otherwise call reset on it */
+/* If the stmt is null, prepare it with str, otherwise call reset on it. The stmt is freed atexit. */
 static int prepare_or_reset(sqlite3_stmt **prep, const char *str)
 {
 	if (*prep == NULL) {
-		int s = sqlite3_prepare_v2(dbconn, str, -1, prep, NULL);
+		int status = sqlite3_prepare_v2(dbconn, str, -1, prep, NULL);
 
-		if (s != SQLITE_OK) {
-			fprintf(stderr, "error: failed preparation of SQL statement (%d)\n", s);
+		if (status != SQLITE_OK) {
+			fprintf(stderr, "error: failed preparation of SQL statement (%d)\n", status);
+
 			exit(1);
 		} else {
+			struct prepcache_node *node = malloc(sizeof(*node));
+
+			if (node == NULL)
+				return ERROR;
+
+			node->next = NULL;
+			node->stmt = *prep;
+
+			if (prepcache != NULL) {
+				struct prepcache_node *walk = prepcache;
+
+				while (walk->next != NULL)
+					walk = walk->next;
+
+				walk->next = node;
+			} else
+				prepcache = node;
+
 			assert(*prep != NULL);
+
 			return SUCCESS;
 		}
 	} else {
 		sqlite3_reset(*prep);
-		return ERROR;
+
+		return SUCCESS;
+	}
+}
+
+/* Prepare a statement, must be finalized. */
+static int prepare(sqlite3_stmt **prep, const char *str)
+{
+	int status = sqlite3_prepare_v2(dbconn, str, -1, prep, NULL);
+
+	if (status != SQLITE_OK) {
+		fprintf(stderr, "error: failed preparation of SQL statement (%d)\n", status);
+
+		exit(1);
+	} else {
+		return SUCCESS;
 	}
 }
 
 int tag_file(const char *file, const char *tag)
 {
-	static sqlite3_stmt *sql_prep = NULL;
 	static const char *sql_str = "INSERT OR IGNORE INTO Tag VALUES (?, ?);";
+	static sqlite3_stmt *sql_prep = NULL;
 
 	// Only one statement in the sql, only one call to step
 	assert(strchr(sql_str, ';') == strrchr(sql_str, ';'));
@@ -144,8 +187,6 @@ int tag_file(const char *file, const char *tag)
 
 	if (sqlite3_step(sql_prep) != SQLITE_DONE)
 		return ERROR;
-
-	sqlite3_finalize(sql_prep);
 
 	return SUCCESS;
 }
@@ -173,9 +214,9 @@ step_t *filter_tag(const char *tag)
 	assert(strchr(sql_str, ';') == strrchr(sql_str, ';'));
 
 	if (tag == NULL)
-		prepare_or_reset(&sql_prep, sql_str_all);
+		prepare(&sql_prep, sql_str_all);
 	else {
-		prepare_or_reset(&sql_prep, sql_str);
+		prepare(&sql_prep, sql_str);
 
 		if (sqlite3_bind_text(sql_prep, 1, tag, -1, SQLITE_STATIC) != SQLITE_OK)
 			return NULL;
@@ -194,9 +235,9 @@ step_t *list_tags(const char *file)
 	assert(strchr(sql_str, ';') == strrchr(sql_str, ';'));
 
 	if (file == NULL)
-		prepare_or_reset(&sql_prep, sql_str_all);
+		prepare(&sql_prep, sql_str_all);
 	else {
-		prepare_or_reset(&sql_prep, sql_str);
+		prepare(&sql_prep, sql_str);
 
 		if (sqlite3_bind_text(sql_prep, 1, file, -1, SQLITE_STATIC) != SQLITE_OK)
 			return NULL;
@@ -205,7 +246,23 @@ step_t *list_tags(const char *file)
 	return (step_t *) sql_prep;
 }
 
-/* Open and init a database, or search for DB_FILENAME if (fn == NULL) and with chdir_to_db if (dir == NULL) */
+static void close_db(void)
+{
+	while (prepcache != NULL) {
+		struct prepcache_node *tmp = prepcache->next;
+
+		sqlite3_finalize(prepcache->stmt);
+		free(prepcache);
+		prepcache = tmp;
+	}
+
+	if (dbconn != NULL)
+		sqlite3_close(dbconn);
+}
+
+/* Open and init database, or search for DB_FILENAME if (fn == NULL) and with chdir_to_db if (dir == NULL)
+ * The database is freed atexit
+ */
 int init_db(char *fn, char *dir)
 {
 	static char *init_sql = "CREATE TABLE IF NOT EXISTS Tag (file varchar(256) NOT NULL, tag varchar(256) NOT NULL);"
@@ -228,18 +285,13 @@ int init_db(char *fn, char *dir)
 	if (sqlite3_open(fn, &dbconn) != SQLITE_OK)
 		return ERROR;
 
+	atexit(close_db);
+
 	if (sqlite3_exec(dbconn, init_sql, NULL, NULL, NULL) != SQLITE_OK)
 		return ERROR;
 	else
 		return SUCCESS;
 }
-
-static void close_db(void)
-{
-	if (dbconn != NULL)
-		sqlite3_close(dbconn);
-}
-
 
 /***--- Entry points ---***/
 
@@ -380,11 +432,9 @@ int main(int argc, char **argv)
 	optind++;
 
 	if (init_db(dbfilename, dbpath) != 0) {
-		close_db();
 		fprintf(stderr, PROGRAM_NAME ": error: failed to initialize database\n");
 		return ERROR;
-	} else
-		atexit(close_db);
+	}
 
 	if (verbosity > 0) {
 		char *cdir = getcwd(NULL, 0);
