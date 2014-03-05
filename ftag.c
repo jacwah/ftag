@@ -65,8 +65,8 @@ static void help(void)
 {
 	static const char *str = "Usage: " PROGRAM_NAME " [-dpvh] MODE ARG...\n"
 	"  " PROGRAM_NAME " [OPTIONS] file FILE TAG...\n"
-	"  " PROGRAM_NAME " [OPTIONS] filter TAG...\n"
-	"  " PROGRAM_NAME " [OPTIONS] list FILE\n"
+	"  " PROGRAM_NAME " [OPTIONS] filter [TAG...]\n"
+	"  " PROGRAM_NAME " [OPTIONS] list [FILE]\n"
 	"\n"
 	"Options:\n"
 	"  -d, --database-name  specify database name\n"
@@ -377,7 +377,7 @@ static int main_list(int argc, char **argv)
 		while((str = step_result(step)) != NULL)
 			puts(str);
 	}
-	
+
 	free_step(step);
 
 	return SUCCESS;
