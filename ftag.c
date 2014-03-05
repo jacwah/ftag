@@ -355,21 +355,29 @@ static int main_filter(int argc, char **argv)
 
 static int main_list(int argc, char **argv)
 {
-	step_t *step;
+	step_t *step = NULL;
 
 	assert(argv != NULL);
 
-	if ((step = list_tags(argc ? argv[0] : NULL)) == NULL) {
+	if (argc == 0)
+		step = list_tags(NULL);
+	else if (argc == 1)
+		step = list_tags(argv[0]);
+	else {
+		usage();
+		return ERROR;
+	}
+
+	if (step == NULL) {
 		fprintf(stderr, PROGRAM_NAME ": error while listing tags\n");
 		free_step(step);
-
 		return ERROR;
 	} else {
 		const char *str = NULL;
-
 		while((str = step_result(step)) != NULL)
 			puts(str);
 	}
+	
 	free_step(step);
 
 	return SUCCESS;
