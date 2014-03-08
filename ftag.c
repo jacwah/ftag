@@ -206,8 +206,8 @@ void free_step(step_t *stmt)
 
 step_t *filter_tag(const char *tag)
 {
-	static const char *sql_str = "SELECT DISTINCT file FROM Tag WHERE tag=?;";
-	static const char *sql_str_all = "SELECT DISTINCT file FROM Tag;";
+	static const char *sql_str = "SELECT DISTINCT file FROM Tag WHERE tag=? ORDER BY file;";
+	static const char *sql_str_all = "SELECT DISTINCT file FROM Tag ORDER BY file;";
 	sqlite3_stmt *sql_prep = NULL;
 
 	// Only one statement in the sql, only one call to step
@@ -227,8 +227,8 @@ step_t *filter_tag(const char *tag)
 
 step_t *list_tags(const char *file)
 {
-	static const char *sql_str = "SELECT DISTINCT tag FROM Tag WHERE file=?;";
-	static const char *sql_str_all = "SELECT DISTINCT tag FROM Tag;";
+	static const char *sql_str = "SELECT DISTINCT tag FROM Tag WHERE file=? ORDER BY tag;";
+	static const char *sql_str_all = "SELECT DISTINCT tag FROM Tag ORDER BY tag;";
 	sqlite3_stmt *sql_prep = NULL;
 
 	// Only one statement in the sql, only one call to step
