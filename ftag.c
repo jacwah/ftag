@@ -51,7 +51,7 @@ static enum {
 
 /* The prepcache is a linked list of prepared statements freed atexit by close_db */
 struct prepcache_node {
-	sqlite3_stmt *stmt;
+	sqlite3_stmt **stmt;
 	struct prepcache_node *next;
 };
 
@@ -134,7 +134,7 @@ static int prepare_or_reset(sqlite3_stmt **prep, const char *str)
 				return ERROR;
 
 			node->next = NULL;
-			node->stmt = *prep;
+			node->stmt = prep;
 
 			if (prepcache != NULL) {
 				struct prepcache_node *walk = prepcache;
@@ -251,13 +251,16 @@ static void close_db(void)
 	while (prepcache != NULL) {
 		struct prepcache_node *tmp = prepcache->next;
 
-		sqlite3_finalize(prepcache->stmt);
+		sqlite3_finalize(*prepcache->stmt);
+		*prepcache->stmt = NULL;
 		free(prepcache);
 		prepcache = tmp;
 	}
 
-	if (dbconn != NULL)
+	if (dbconn != NULL) {
 		sqlite3_close(dbconn);
+		dbconn = NULL;
+	}
 }
 
 /* Open and init database, or search for DB_FILENAME if (fn == NULL) and with chdir_to_db if (dir == NULL)
