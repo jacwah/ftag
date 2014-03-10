@@ -193,18 +193,29 @@ int tag_file(const char *file, const char *tag)
 
 const char *step_result(step_t *stmt)
 {
-	if (sqlite3_step(stmt) == SQLITE_ROW)
+	int status = sqlite3_step(stmt);
+
+	if (status == SQLITE_ROW)
 		return (char *) sqlite3_column_text(stmt, 0);
-	else
+	else if (status == SQLITE_DONE)
 		return NULL;
+	else {
+		fprintf(stderr, PROGRAM_NAME ": error stepping result\n");
+		exit(ERROR);
+	}
 }
 
 void free_step(step_t *stmt)
 {
+#ifndef NDEBUG
+	int status =
+#endif
 	sqlite3_finalize(stmt);
+
+	assert(status == SQLITE_OK);
 }
 
-step_t *filter_tag(const char *tag)
+step_t *filter_by_tag(const char *tag)
 {
 	static const char *sql_str = "SELECT DISTINCT file FROM Tag WHERE tag=? ORDER BY file;";
 	static const char *sql_str_all = "SELECT DISTINCT file FROM Tag ORDER BY file;";
@@ -225,7 +236,54 @@ step_t *filter_tag(const char *tag)
 	return (step_t *) sql_prep;
 }
 
-step_t *list_tags(const char *file)
+step_t *filter_by_tags(int tagc, char **tagv)
+{
+	static const char *sql_base_str = "SELECT DISTINCT file FROM Tag WHERE tag IN (?";
+	static const char *sql_end_str = ") ORDER BY file DESC;";
+	sqlite3_stmt *prep = NULL;
+	size_t sql_len = 0;
+	char *sql_str = NULL;
+
+	assert(tagc > 0);
+
+	sql_len = strlen(sql_base_str) + strlen(sql_end_str) + 1;
+	sql_str = malloc(sql_len);
+
+	if (sql_str == NULL)
+		goto mem_err;
+
+	strcpy(sql_str, sql_base_str);
+
+	for (int i = 1; i < tagc; i++) {
+		sql_str = realloc(sql_str, sql_len + 2);
+		sql_len += 2;
+
+		if (sql_str == NULL)
+			goto mem_err;
+
+		strcat(sql_str, ",?");
+	}
+
+	strcat(sql_str, sql_end_str);
+	prepare(&prep, sql_str);
+
+	if (sql_str != NULL)
+		free(sql_str);
+
+	for (int i = 0; i < tagc; i++)
+		if (sqlite3_bind_text(prep, i + 1, tagv[i], -1, SQLITE_TRANSIENT) != SQLITE_OK) {
+			fprintf(stderr, PROGRAM_NAME ": error binding SQLITE values\n");
+			exit(ERROR);
+		}
+
+	return (step_t *) prep;
+
+	mem_err:
+	fprintf(stderr, PROGRAM_NAME ": failed memory allocation, exiting\n");
+	exit(ERROR);
+}
+
+step_t *list_by_file(const char *file)
 {
 	static const char *sql_str = "SELECT DISTINCT tag FROM Tag WHERE file=? ORDER BY tag;";
 	static const char *sql_str_all = "SELECT DISTINCT tag FROM Tag ORDER BY tag;";
@@ -319,39 +377,35 @@ static int main_tag_file(int argc, char **argv)
 
 static int main_filter(int argc, char **argv)
 {
+	step_t *step = NULL;
+
 	assert(argv != NULL);
 
 	if (argc == 0) {
-		step_t *step = NULL;
-
-		if ((step = filter_tag(NULL)) == NULL) {
+		if ((step = filter_by_tag(NULL)) == NULL) {
 			fprintf(stderr, PROGRAM_NAME ": error while filtering tag\n");
 			return ERROR;
-		} else {
-			const char *str = NULL;
-
-			while ((str = step_result(step)) != NULL)
-				puts(str);
 		}
-
-		free_step(step);
-	}
-
-	for (int i = 0; i < argc; i++) {
-		step_t *step = NULL;
-
-		if ((step = filter_tag(argv[i])) == NULL) {
+	} else if (argc == 1) {
+		if ((step = filter_by_tag(argv[0])) == NULL) {
+			fprintf(stderr, PROGRAM_NAME ": error while filtering tag \n");
+			return ERROR;
+		}
+	} else {
+		if ((step = filter_by_tags(argc, argv)) == NULL) {
 			fprintf(stderr, PROGRAM_NAME ": error while filtering tag\n");
 			return ERROR;
-		} else {
-			const char *str = NULL;
-
-			while ((str = step_result(step)) != NULL)
-				puts(str);
 		}
-
-		free_step(step);
 	}
+
+	if (step != NULL) {
+		const char *str = NULL;
+
+		while ((str = step_result(step)) != NULL)
+			puts(str);
+	}
+
+	free_step(step);
 
 	return SUCCESS;
 }
@@ -363,9 +417,9 @@ static int main_list(int argc, char **argv)
 	assert(argv != NULL);
 
 	if (argc == 0)
-		step = list_tags(NULL);
+		step = list_by_file(NULL);
 	else if (argc == 1)
-		step = list_tags(argv[0]);
+		step = list_by_file(argv[0]);
 	else {
 		usage();
 		return ERROR;
