@@ -458,7 +458,7 @@ int main(int argc, char **argv)
 	};
 
 	opterr = 0;
-	while ((chr = getopt_long(argc, argv, "d:v", longopts, NULL)) != -1) {
+	while ((chr = getopt_long(argc, argv, "d:p:v", longopts, NULL)) != -1) {
 		switch (chr) {
 			case 'd':
 				dbfilename = optarg;
