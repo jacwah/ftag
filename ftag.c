@@ -59,16 +59,19 @@ struct prepcache_node *prepcache = NULL;
 
 static sqlite3 *dbconn = NULL;
 
+int showhidden = 0;
+
 /***--- Util ---***/
 
 static void help(void)
 {
-	static const char *str = "Usage: " PROGRAM_NAME " [-dpvh] MODE ARG...\n"
+	static const char *str = "Usage: " PROGRAM_NAME " [OPTIONS] MODE ARG...\n"
 	"  " PROGRAM_NAME " [OPTIONS] file FILE TAG...\n"
 	"  " PROGRAM_NAME " [OPTIONS] filter [TAG...]\n"
 	"  " PROGRAM_NAME " [OPTIONS] list [FILE]\n"
 	"\n"
 	"Options:\n"
+	"  -a, --show-hidden    show all files/tags, even those beginning with a .\n"
 	"  -d, --database-name  specify database name\n"
 	"  -p, --database-dir   force database directory\n"
 	"  -v                   increase output verbosity (can be used multiple times)\n"
@@ -193,11 +196,19 @@ int tag_file(const char *file, const char *tag)
 
 const char *step_result(step_t *stmt)
 {
-	int status = sqlite3_step(stmt);
+	int status;
 
-	if (status == SQLITE_ROW)
-		return (char *) sqlite3_column_text(stmt, 0);
-	else if (status == SQLITE_DONE)
+	top:
+	status = sqlite3_step(stmt);
+
+	if (status == SQLITE_ROW) {
+		const char *str = (char *) sqlite3_column_text(stmt, 0);
+
+		if (!showhidden && *str == '.')
+			goto top;
+
+		return str;
+	} else if (status == SQLITE_DONE)
 		return NULL;
 	else {
 		fprintf(stderr, PROGRAM_NAME ": error stepping result\n");
@@ -450,6 +461,7 @@ int main(int argc, char **argv)
 	char *dbpath = NULL;
 
 	static struct option longopts[] = {
+		{"show-hidden", no_argument, 0, 'a'},
 		{"database-name", required_argument, 0, 'd'},
 		{"database-dir", required_argument, 0, 'p'},
 		{"verbose", no_argument, 0, 'v'},
@@ -458,8 +470,11 @@ int main(int argc, char **argv)
 	};
 
 	opterr = 0;
-	while ((chr = getopt_long(argc, argv, "d:p:v", longopts, NULL)) != -1) {
+	while ((chr = getopt_long(argc, argv, "ad:p:v", longopts, NULL)) != -1) {
 		switch (chr) {
+			case 'a':
+				showhidden = 1;
+				break;
 			case 'd':
 				dbfilename = optarg;
 				break;
