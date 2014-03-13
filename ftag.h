@@ -24,7 +24,6 @@
 #define SUCCESS 0
 #define ERROR 1
 
-struct sqlite3_stmt;
 typedef struct sqlite3_stmt step_t;
 
 extern int tag_file(const char *file, const char *tag);
