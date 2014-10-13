@@ -511,6 +511,11 @@ int main(int argc, char **argv)
 
 	optind++;
 
+	if (dbfilename == NULL) {
+		static char *filename_static = DB_FILENAME;
+		dbfilename = filename_static;
+	}
+
 	if (init_db(dbfilename, dbpath) != 0) {
 		fprintf(stderr, PROGRAM_NAME ": error: failed to initialize database\n");
 		return ERROR;
