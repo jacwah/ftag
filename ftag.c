@@ -438,7 +438,6 @@ static int main_list(int argc, char **argv)
 
 	if (step == NULL) {
 		fprintf(stderr, PROGRAM_NAME ": error while listing tags\n");
-		free_step(step);
 		return ERROR;
 	} else {
 		const char *str = NULL;
