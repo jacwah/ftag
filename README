@@ -1,14 +1,15 @@
 ftag -- tag and filter your files
 =================================
 
-ftag is a command line tool to tag files. Muliple tags can be
+ftag is a command line tool to tag files. Multiple tags can be
 attached to the same file name. Files can later be filtered by tags.
 You should not expect to much of this small project as of yet, but
 are welcome to contribute. Below is a short description of the three
 modes available and their use. A more complete reference can be found
 using the --help option. Run 'make' to compile the sources. I can be
 reached in the github repo at github.com/jacwah/ftag. Unix-like
-systems, like OSX and Linux are supported.
+systems, like OSX and Linux are supported. ftag uses CuTest for unit
+testing.
 
 ftag file FILE TAG...
 Add any number of tags to the file FILE.

@@ -1,6 +1,7 @@
 /*
  * ftag -- tag your files
- * Copyright 2014 Jacob Wahlgren
+ * Copyright 2014, 2015 Jacob Wahlgren
+ * jacob.wahlgren@gmail.com
  * 
  */
 
@@ -81,7 +82,7 @@ static void help(void)
 	"\n"
 	"Report bugs to jacob.wahlgren@gmail.com.\n"
 	"This software is licensed under the GNU General public license.\n"
-	"Copyright 2014 Jacob Wahlgren.\n";
+	"Copyright 2014, 2015 Jacob Wahlgren.\n";
 	fputs(str, stderr);
 }
 
