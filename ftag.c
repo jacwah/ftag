@@ -32,6 +32,7 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <sqlite3.h>
+#include "CuTest.h"
 #include "ftag.h"
 
 /***--- Constants and globals ---***/
@@ -75,6 +76,7 @@ static void help(void)
 	"  -d, --database-name  specify database name\n"
 	"  -p, --database-dir   force database directory\n"
 	"  -v                   increase output verbosity (can be used multiple times)\n"
+    "  -t, --test           run unit tests and exit\n"
 	"  --help               show this help\n"
 	"\n"
 	"Report bugs to jacob.wahlgren@gmail.com.\n"
@@ -450,6 +452,9 @@ static int main_list(int argc, char **argv)
 	return SUCCESS;
 }
 
+// Forward declartion to make it run in main
+static int run_tests(void);
+
 int main(int argc, char **argv)
 {
 	/* Look at git argument parsing for ideas on handling modes etc */
@@ -465,11 +470,12 @@ int main(int argc, char **argv)
 		{"database-dir", required_argument, 0, 'p'},
 		{"verbose", no_argument, 0, 'v'},
 		{"help", no_argument, 0, 'h'},
+        {"test", no_argument, 0, 't'},
 		{0, 0, 0, 0}
 	};
 
 	opterr = 0;
-	while ((chr = getopt_long(argc, argv, "ad:p:v", longopts, NULL)) != -1) {
+	while ((chr = getopt_long(argc, argv, "ad:p:vt", longopts, NULL)) != -1) {
 		switch (chr) {
 			case 'a':
 				showhidden = 1;
@@ -486,6 +492,8 @@ int main(int argc, char **argv)
 			case 'p':
 				dbpath = optarg;
 				break;
+            case 't':
+               return run_tests();
 			default:
 				usage();
 				return ERROR;
@@ -550,4 +558,49 @@ int main(int argc, char **argv)
 		}
 	} else
 		return ERROR;
+}
+
+/***--- Tests ---***/
+
+static void test_chdir_to_db_null_return(CuTest *tc)
+{
+    CuAssertIntEquals(tc, ERROR, chdir_to_db(NULL));
+}
+
+static void test_chdir_to_db_null_cwd(CuTest *tc)
+{
+    char *beforedir = getcwd(NULL, 0);
+    char *afterdir = NULL;
+
+    chdir_to_db(NULL);
+    afterdir = getcwd(NULL, 0);
+    CuAssertStrEquals(tc, beforedir, afterdir);
+    free(beforedir);
+    free(afterdir);
+}
+
+static CuSuite *chdir_to_db_get_suite()
+{
+    CuSuite* suite = CuSuiteNew();
+
+    SUITE_ADD_TEST(suite, test_chdir_to_db_null_return);
+    SUITE_ADD_TEST(suite, test_chdir_to_db_null_cwd);
+ 
+    return suite;
+}
+
+
+static int run_tests(void)
+{
+    CuString *output = CuStringNew();
+    CuSuite *suite = CuSuiteNew();
+
+    CuSuiteAddSuite(suite, chdir_to_db_get_suite());
+   
+    CuSuiteRun(suite);
+    CuSuiteSummary(suite, output);
+    CuSuiteDetails(suite, output);
+    fprintf(stderr, "%s\n", output->buffer);
+    
+    return SUCCESS;
 }
