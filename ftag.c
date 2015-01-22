@@ -44,7 +44,7 @@
 
 #define PROGRAM_NAME "ftag"
 
-static enum {
+enum mode {
 	MODE_NONE,
 	MODE_TAG_FILE,
 	MODE_FILTER,
@@ -460,7 +460,7 @@ int main(int argc, char **argv)
 {
 	/* Look at git argument parsing for ideas on handling modes etc */
 	int chr = 0;
-	int mode = MODE_NONE;
+	enum mode mode = MODE_NONE;
 	char *dbfilename = NULL;
 	int verbosity = 0;
 	char *dbpath = NULL;
