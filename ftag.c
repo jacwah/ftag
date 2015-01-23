@@ -53,7 +53,7 @@ enum mode {
 
 /* The prepcache is a linked list of prepared statements freed atexit by close_db */
 struct prepcache_node {
-	sqlite3_stmt **stmt;
+	sqlite3_stmt *stmt;
 	struct prepcache_node *next;
 };
 
@@ -123,6 +123,41 @@ static int chdir_to_db(const char *fn)
 
 /***--- SQLite wrappers and helpers ---***/
 
+static int prepcache_add(sqlite3_stmt **stmt)
+{
+    struct prepcache_node *node = malloc(sizeof(*node));
+
+    if (node == NULL || stmt == NULL)
+        return ERROR;
+
+    node->next = NULL;
+    node->stmt = *stmt;
+
+    if (prepcache != NULL) {
+        struct prepcache_node *walk = prepcache;
+
+        while (walk->next != NULL)
+            walk = walk->next;
+
+        walk->next = node;
+    } else
+        prepcache = node;
+
+    return SUCCESS;
+}
+
+static void prepcache_free(void)
+{
+    while (prepcache != NULL) {
+        struct prepcache_node *tmp = prepcache->next;
+
+        sqlite3_finalize(prepcache->stmt);
+        prepcache->stmt = NULL;
+        free(prepcache);
+        prepcache = tmp;
+    }
+}
+
 /* If the stmt is null, prepare it with str, otherwise call reset on it. The stmt is freed atexit. */
 static int prepare_or_reset(sqlite3_stmt **prep, const char *str)
 {
@@ -134,23 +169,7 @@ static int prepare_or_reset(sqlite3_stmt **prep, const char *str)
 
 			exit(1);
 		} else {
-			struct prepcache_node *node = malloc(sizeof(*node));
-
-			if (node == NULL)
-				return ERROR;
-
-			node->next = NULL;
-			node->stmt = prep;
-
-			if (prepcache != NULL) {
-				struct prepcache_node *walk = prepcache;
-
-				while (walk->next != NULL)
-					walk = walk->next;
-
-				walk->next = node;
-			} else
-				prepcache = node;
+            prepcache_add(prep);
 
 			assert(*prep != NULL);
 
@@ -320,14 +339,7 @@ step_t *list_by_file(const char *file)
 
 static void close_db(void)
 {
-	while (prepcache != NULL) {
-		struct prepcache_node *tmp = prepcache->next;
-
-		sqlite3_finalize(*prepcache->stmt);
-		*prepcache->stmt = NULL;
-		free(prepcache);
-		prepcache = tmp;
-	}
+    prepcache_free();
 
 	if (dbconn != NULL) {
 		sqlite3_close(dbconn);
@@ -582,7 +594,7 @@ static void test_chdir_to_db_null_cwd(CuTest *tc)
 
 static CuSuite *chdir_to_db_get_suite()
 {
-    CuSuite* suite = CuSuiteNew();
+    CuSuite *suite = CuSuiteNew();
 
     SUITE_ADD_TEST(suite, test_chdir_to_db_null_return);
     SUITE_ADD_TEST(suite, test_chdir_to_db_null_cwd);
@@ -590,6 +602,109 @@ static CuSuite *chdir_to_db_get_suite()
     return suite;
 }
 
+static void test_prepcache_add_null_stmt_empty(CuTest *tc)
+{
+    // empty prepcache
+    CuAssertIntEquals(tc, ERROR, prepcache_add(NULL));
+}
+
+static void test_prepcache_add_null_stmt(CuTest *tc)
+{
+    // non empty prepcache
+    prepcache = malloc(sizeof(*prepcache));
+
+    if (prepcache == NULL) {
+        fprintf(stderr, PROGRAM_NAME ": failed malloc call\n");
+        exit(1);
+    }
+
+    prepcache->stmt = NULL;
+    prepcache->next = NULL;
+
+    CuAssertIntEquals(tc, ERROR, prepcache_add(NULL));
+
+    free(prepcache);
+    prepcache = NULL;
+}
+
+static CuSuite *prepcache_add_get_suite()
+{
+    CuSuite *suite = CuSuiteNew();
+
+    SUITE_ADD_TEST(suite, test_prepcache_add_null_stmt_empty);
+    SUITE_ADD_TEST(suite, test_prepcache_add_null_stmt);
+
+    return suite;
+}
+
+static void test_prepcache_free_when_null(CuTest *tc)
+{
+    assert(prepcache == NULL);
+    prepcache_free();
+    CuAssertPtrEquals(tc, NULL, prepcache);
+}
+
+static void test_prepcache_free_one_node(CuTest *tc)
+{
+    sqlite3 *db;
+    const char *str = "CREATE TABLE IF NOT EXISTS Tag (file varchar(256) NOT NULL, tag varchar(256) NOT NULL);";
+
+    CuAssertIntEquals(tc, SQLITE_OK, sqlite3_open(":memory:", &db));
+    prepcache = malloc(sizeof(*prepcache));
+
+    sqlite3_prepare_v2(db, str, -1, &prepcache->stmt, NULL);
+    prepcache->next = NULL;
+
+    prepcache_free();
+
+    CuAssertPtrEquals(tc, NULL, prepcache);
+
+    sqlite3_close(db);
+}
+
+static void test_prepcache_free_multiple(CuTest *tc)
+{
+    sqlite3 *db;
+
+    CuAssertIntEquals(tc, SQLITE_OK, sqlite3_open(":memory:", &db));
+
+    prepcache = malloc(sizeof(*prepcache));
+    sqlite3_prepare_v2(db, "CREATE TABLE IF NOT EXISTS Tag (file varchar(256) NOT NULL, tag varchar(256) NOT NULL);", -1, &prepcache->stmt, NULL);
+    if (prepcache == NULL) goto mem_err;
+
+    prepcache->next = malloc(sizeof(*prepcache));
+    sqlite3_prepare_v2(db, "CREATE UNIQUE INDEX IF NOT EXISTS uq_Tag on Tag (file, tag);", -1, &prepcache->next->stmt, NULL);
+    if (prepcache->next == NULL) goto mem_err;
+
+    prepcache->next->next = malloc(sizeof(*prepcache));
+    sqlite3_prepare_v2(db, "SELECT DISTINCT tag FROM Tag ORDER BY tag;", -1,
+        &prepcache->next->next->stmt, NULL);
+    if (prepcache->next->next == NULL) goto mem_err;
+    prepcache->next->next->next = NULL;
+
+    prepcache_free();
+
+    CuAssertPtrEquals(tc, NULL, prepcache);
+
+    sqlite3_close(db);
+
+    return;
+
+mem_err:
+    fprintf(stderr, PROGRAM_NAME ": failed malloc call\n");
+    exit(1);
+}
+
+static CuSuite *prepcache_free_get_suite()
+{
+    CuSuite *suite = CuSuiteNew();
+
+    SUITE_ADD_TEST(suite, test_prepcache_free_when_null);
+    SUITE_ADD_TEST(suite, test_prepcache_free_one_node);
+    SUITE_ADD_TEST(suite, test_prepcache_free_multiple);
+
+    return suite;
+}
 
 static int run_tests(void)
 {
@@ -597,6 +712,8 @@ static int run_tests(void)
     CuSuite *suite = CuSuiteNew();
 
     CuSuiteAddSuite(suite, chdir_to_db_get_suite());
+    CuSuiteAddSuite(suite, prepcache_add_get_suite());
+    CuSuiteAddSuite(suite, prepcache_free_get_suite());
    
     CuSuiteRun(suite);
     CuSuiteSummary(suite, output);
