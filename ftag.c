@@ -165,7 +165,8 @@ static int prepare_or_reset(sqlite3_stmt **prep, const char *str)
 		int status = sqlite3_prepare_v2(dbconn, str, -1, prep, NULL);
 
 		if (status != SQLITE_OK) {
-			fprintf(stderr, "error: failed preparation of SQL statement (%d)\n", status);
+			fprintf(stderr, PROGRAM_NAME ": error: failed preparation of SQL"
+                    "statement (%d)\n\"%s\"\n", status, str);
 
 			exit(1);
 		} else {
