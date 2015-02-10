@@ -198,22 +198,43 @@ static int prepare(sqlite3_stmt **prep, const char *str)
 
 int tag_file(const char *file, const char *tag)
 {
-	static const char *sql_str = "INSERT OR IGNORE INTO Tag VALUES (?, ?);";
-	static sqlite3_stmt *sql_prep = NULL;
+	static const char *sql_str =
+    "BEGIN;"
+    "INSERT OR IGNORE INTO tag (name) VALUES (:tag);"
+    "INSERT OR IGNORE INTO file (relative_path) VALUES (:file);"
+    "INSERT INTO file_tag (file_id, tag_id) SELECT file.id, tag.id FROM "
+    "file, tag WHERE file.relative_path = :file AND tag.name = :tag;"
+    "COMMIT;"
+    ;
 
-	// Only one statement in the sql, only one call to step
-	assert(strchr(sql_str, ';') == strrchr(sql_str, ';'));
+	sqlite3_stmt *sql_prep = NULL;
+    const char *sql_unread = sql_str;
 
-	prepare_or_reset(&sql_prep, sql_str);
+    // Prepare, bind and execute one statement at a time
+    while (sql_unread < sql_str + strlen(sql_str)) {
+        sqlite3_prepare_v2(dbconn, sql_unread, -1, &sql_prep, &sql_unread);
 
-	if (sqlite3_bind_text(sql_prep, 1, file, -1, SQLITE_STATIC) != SQLITE_OK ||
-		sqlite3_bind_text(sql_prep, 2, tag, -1, SQLITE_STATIC) != SQLITE_OK)
-		return ERROR;
+        // Is 0 if parameter doesn't exist in this statement
+        int file_index = sqlite3_bind_parameter_index(sql_prep, ":file");
+        int tag_index = sqlite3_bind_parameter_index(sql_prep, ":tag");
 
-	if (sqlite3_step(sql_prep) != SQLITE_DONE)
-		return ERROR;
+        if (file_index > 0)
+            if (sqlite3_bind_text(sql_prep, file_index, file, -1, SQLITE_STATIC)
+                != SQLITE_OK)
+                return ERROR;
 
-	return SUCCESS;
+        if (tag_index > 0)
+            if (sqlite3_bind_text(sql_prep, tag_index, tag, -1, SQLITE_STATIC)
+                != SQLITE_OK)
+                return ERROR;
+
+        if (sqlite3_step(sql_prep) != SQLITE_DONE)
+            return ERROR;
+
+        sqlite3_finalize(sql_prep);
+    }
+
+    return SUCCESS;
 }
 
 const char *step_result(step_t *stmt)
@@ -352,8 +373,17 @@ static void close_db(void)
  */
 int init_db(char *fn, char *dir)
 {
-	static char *init_sql = "CREATE TABLE IF NOT EXISTS Tag (file varchar(256) NOT NULL, tag varchar(256) NOT NULL);"
-	"CREATE UNIQUE INDEX IF NOT EXISTS uq_Tag on Tag (file, tag);";
+	static char *init_sql =
+    "BEGIN IMMEDIATE;"
+    "CREATE TABLE file ( id INTEGER PRIMARY KEY, relative_path TEXT );"
+    "CREATE TABLE tag ( id INTEGER PRIMARY KEY, name TEXT );"
+    "CREATE TABLE file_tag ( file_id INTEGER, tag_id INTEGER );"
+
+    "CREATE UNIQUE INDEX file_path_uq ON file (relative_path);"
+    "CREATE UNIQUE INDEX tag_name_uq ON tag (name);"
+    "CREATE UNIQUE INDEX file_tag_uq ON file_tag (file_id, tag_id);"
+    "COMMIT;"
+    ;
 
 	if (dbconn != NULL)
 		return ERROR;
@@ -369,15 +399,24 @@ int init_db(char *fn, char *dir)
 			exit(ERROR);
 		}
 
-	if (sqlite3_open(fn, &dbconn) != SQLITE_OK)
-		return ERROR;
+    // Return error if database doesn't already exist
+    int status = sqlite3_open_v2(fn, &dbconn, SQLITE_OPEN_READWRITE, NULL);
+
+    if (status != SQLITE_OK) {
+        status = sqlite3_open_v2(fn, &dbconn, SQLITE_OPEN_READWRITE |
+                                 SQLITE_OPEN_CREATE, NULL);
+        if (status != SQLITE_OK)
+            return ERROR;
+        else {
+            status = sqlite3_exec(dbconn, init_sql, NULL, NULL, NULL);
+            if (status != SQLITE_OK)
+                return ERROR;
+        }
+    }
 
 	atexit(close_db);
 
-	if (sqlite3_exec(dbconn, init_sql, NULL, NULL, NULL) != SQLITE_OK)
-		return ERROR;
-	else
-		return SUCCESS;
+    return SUCCESS;
 }
 
 /***--- Entry points ---***/
