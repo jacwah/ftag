@@ -210,9 +210,14 @@ int tag_file(const char *file, const char *tag)
 	sqlite3_stmt *sql_prep = NULL;
     const char *sql_unread = sql_str;
 
+    if (file == NULL || tag == NULL)
+        return ERROR;
+
     // Prepare, bind and execute one statement at a time
     while (sql_unread < sql_str + strlen(sql_str)) {
-        sqlite3_prepare_v2(dbconn, sql_unread, -1, &sql_prep, &sql_unread);
+        int status = sqlite3_prepare_v2(dbconn, sql_unread, -1, &sql_prep, &sql_unread);
+        if (status != SQLITE_OK)
+            return ERROR;
 
         // Is 0 if parameter doesn't exist in this statement
         int file_index = sqlite3_bind_parameter_index(sql_prep, ":file");
@@ -232,6 +237,7 @@ int tag_file(const char *file, const char *tag)
             return ERROR;
 
         sqlite3_finalize(sql_prep);
+        sql_prep = NULL;
     }
 
     return SUCCESS;
@@ -777,6 +783,97 @@ static CuSuite *prepcache_free_get_suite()
     return suite;
 }
 
+static void test_tag_file_null_file(CuTest *tc)
+{
+    setup_test_db(tc);
+    CuAssertIntEquals(tc, ERROR, tag_file(NULL, "tag"));
+    close_db();
+}
+
+static void test_tag_file_null_tag(CuTest *tc)
+{
+    setup_test_db(tc);
+    CuAssertIntEquals(tc, ERROR, tag_file("file", NULL));
+    close_db();
+}
+
+static void test_tag_file_tag_exits(CuTest *tc)
+{
+    sqlite3_stmt *prep = NULL;
+
+    setup_test_db(tc);
+
+    CuAssertIntEquals(tc, SUCCESS, tag_file("file", "tag"));
+    CuAssertIntEquals(tc, SQLITE_OK,
+                      sqlite3_prepare_v2(dbconn, "SELECT name FROM tag;", -1,
+                                         &prep, NULL)
+                      );
+    CuAssertIntEquals(tc, SQLITE_ROW, sqlite3_step(prep));
+    CuAssertStrEquals(tc, "tag",
+                      // This cast is hopefully safe
+                      (const char *) sqlite3_column_text(prep, 1));
+    sqlite3_finalize(prep);
+    close_db();
+
+}
+
+static void test_tag_file_file_exits(CuTest *tc)
+{
+    sqlite3_stmt *prep = NULL;
+
+    setup_test_db(tc);
+
+    CuAssertIntEquals(tc, SUCCESS, tag_file("file", "tag"));
+    CuAssertIntEquals(tc, SQLITE_OK,
+                      sqlite3_prepare_v2(dbconn,
+                                         "SELECT relative_path FROM file;", -1,
+                                         &prep, NULL)
+                      );
+    CuAssertIntEquals(tc, SQLITE_ROW, sqlite3_step(prep));
+    CuAssertStrEquals(tc, "file",
+                      // This cast is hopefully safe
+                      (const char *)sqlite3_column_text(prep, 1));
+    // no more rows should be returned!!
+    sqlite3_finalize(prep);
+    close_db();
+}
+
+static void test_tag_file_xref_exits(CuTest *tc)
+{
+    sqlite3_stmt *prep = NULL;
+
+    setup_test_db(tc);
+
+    CuAssertIntEquals(tc, SUCCESS, tag_file("file", "tag"));
+    sqlite3_prepare_v2(dbconn, "SELECT file_id, tag_id FROM file_tag;", -1,
+                       &prep, NULL);
+    CuAssertIntEquals(tc, SQLITE_ROW, sqlite3_step(prep));
+
+    // Since the in-memory database should be empty, both file and
+    // tag should have been assigned id 1
+    CuAssertIntEquals(tc, 1, sqlite3_column_int(prep, 1));
+    CuAssertIntEquals(tc, 1, sqlite3_column_int(prep, 2));
+
+    sqlite3_finalize(prep);
+
+    close_db();
+}
+
+static CuSuite *tag_file_get_suite()
+{
+    CuSuite *suite = CuSuiteNew();
+
+    SUITE_ADD_TEST(suite, test_tag_file_null_file);
+    SUITE_ADD_TEST(suite, test_tag_file_null_tag);
+    SUITE_ADD_TEST(suite, test_tag_file_tag_exits);
+    SUITE_ADD_TEST(suite, test_tag_file_file_exits);
+    SUITE_ADD_TEST(suite, test_tag_file_xref_exits);
+
+    return suite;
+}
+
+/* TEST init_db in empty tmp dir when fn is :memory: */
+
 static int run_tests(void)
 {
     CuString *output = CuStringNew();
@@ -785,6 +882,7 @@ static int run_tests(void)
     CuSuiteAddSuite(suite, chdir_to_db_get_suite());
     CuSuiteAddSuite(suite, prepcache_add_get_suite());
     CuSuiteAddSuite(suite, prepcache_free_get_suite());
+    CuSuiteAddSuite(suite, tag_file_get_suite());
    
     CuSuiteRun(suite);
     CuSuiteSummary(suite, output);
