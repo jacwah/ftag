@@ -368,12 +368,8 @@ static void close_db(void)
 	}
 }
 
-/* Open and init database, or search for DB_FILENAME if (fn == NULL) and with chdir_to_db if (dir == NULL)
- * The database is freed atexit
- */
-int init_db(char *fn, char *dir)
-{
-	static char *init_sql =
+static int run_init_db_sql() {
+    static char *init_sql =
     "BEGIN IMMEDIATE;"
     "CREATE TABLE file ( id INTEGER PRIMARY KEY, relative_path TEXT );"
     "CREATE TABLE tag ( id INTEGER PRIMARY KEY, name TEXT );"
@@ -385,19 +381,33 @@ int init_db(char *fn, char *dir)
     "COMMIT;"
     ;
 
+    return sqlite3_exec(dbconn, init_sql, NULL, NULL, NULL);
+}
+
+/* Open and init database, or search for DB_FILENAME if (fn == NULL) and with chdir_to_db if (dir == NULL)
+ * The database is freed atexit
+ * If fn is :memory: and dir is NULL it will open an in-memory database
+ */
+int init_db(char *fn, char *dir)
+{
 	if (dbconn != NULL)
 		return ERROR;
 
-	if (fn == NULL)
+    if (fn == NULL) {
 		fn = DB_FILENAME;
+    // Do not accidentaly open memory db
+    } else if (strcmp(":memory:", fn) == 0 && dir == NULL) {
+        fn = "./:memory:";
+    }
 
-	if (dir == NULL)
-		chdir_to_db(fn);
-	else
-		if (chdir(dir) != 0) {
-			fprintf(stderr, PROGRAM_NAME ": failed to change to dir '%s'\n", dir);
-			exit(ERROR);
-		}
+    if (dir == NULL) {
+        chdir_to_db(fn);
+    } else {
+        if (chdir(dir) != 0) {
+            fprintf(stderr, PROGRAM_NAME ": failed to change to dir '%s'\n", dir);
+            exit(ERROR);
+        }
+    }
 
     // Return error if database doesn't already exist
     int status = sqlite3_open_v2(fn, &dbconn, SQLITE_OPEN_READWRITE, NULL);
@@ -408,7 +418,7 @@ int init_db(char *fn, char *dir)
         if (status != SQLITE_OK)
             return ERROR;
         else {
-            status = sqlite3_exec(dbconn, init_sql, NULL, NULL, NULL);
+            status = run_init_db_sql();
             if (status != SQLITE_OK)
                 return ERROR;
         }
@@ -417,6 +427,21 @@ int init_db(char *fn, char *dir)
 	atexit(close_db);
 
     return SUCCESS;
+}
+
+/* Same as init_db, but use a volatile in-memory database instead of on disk */
+int init_memory_db(void) {
+    if (dbconn != NULL)
+        return ERROR;
+
+    int status = sqlite3_open_v2(":memory:", &dbconn,
+                                 SQLITE_OPEN_READWRITE, NULL);
+    if (status != SQLITE_OK)
+        return ERROR;
+    else if (run_init_db_sql() != SQLITE_OK)
+        return ERROR;
+    else
+        return SUCCESS;
 }
 
 /***--- Entry points ---***/
@@ -613,6 +638,13 @@ int main(int argc, char **argv)
 }
 
 /***--- Tests ---***/
+
+static void setup_test_db(CuTest *tc) {
+    // When tests fail, they won't be able to close_db
+    if (dbconn != NULL)
+        close_db();
+    CuAssertIntEquals(tc, SUCCESS, init_memory_db());
+}
 
 static void test_chdir_to_db_null_return(CuTest *tc)
 {
