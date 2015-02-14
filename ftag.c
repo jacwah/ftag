@@ -402,7 +402,7 @@ int init_db(char *fn, char *dir)
     if (fn == NULL) {
 		fn = DB_FILENAME;
     // Do not accidentaly open memory db
-    } else if (strcmp(":memory:", fn) == 0 && dir == NULL) {
+    } else if (strcmp(":memory:", fn) == 0) {
         fn = "./:memory:";
     }
 
@@ -870,7 +870,69 @@ static CuSuite *tag_file_get_suite()
     return suite;
 }
 
-/* TEST init_db in empty tmp dir when fn is :memory: */
+static void test_init_db_fn_memory_with_dir(CuTest *tc)
+{
+    char dir[4 + 6];
+
+    if (dbconn != NULL) {
+        close_db();
+        dbconn = NULL;
+    }
+
+    strncpy(dir, "ftagXXXXXX", sizeof(dir));
+    char *status = mkdtemp(dir);
+    if (status == NULL)
+        CuFail(tc, "Failed mkdtemp");
+
+    CuAssertIntEquals(tc, SUCCESS, init_db(":memory:", dir));
+    chdir(dir);
+
+    int exists = access(":memory:", F_OK);
+
+    unlink(":memory:");
+    chdir("..");
+    rmdir(dir);
+    close_db();
+
+    CuAssertIntEquals(tc, 0, exists);
+}
+
+static void test_init_db_fn_memory_null_dir(CuTest *tc)
+{
+    char dir[4 + 6];
+
+    if (dbconn != NULL) {
+        close_db();
+        dbconn = NULL;
+    }
+
+    strncpy(dir, "ftagXXXXXX", sizeof(dir));
+    char *status = mkdtemp(dir);
+    if (status == NULL)
+        CuFail(tc, "Failed mkdtemp");
+
+    chdir(dir);
+    CuAssertIntEquals(tc, SUCCESS, init_db(":memory:", NULL));
+
+    int exists = access(":memory:", F_OK);
+
+    unlink(":memory:");
+    chdir("..");
+    rmdir(dir);
+    close_db();
+
+    CuAssertIntEquals(tc, 0, exists);
+}
+
+static CuSuite *init_db_get_suite()
+{
+    CuSuite *suite = CuSuiteNew();
+
+    SUITE_ADD_TEST(suite, test_init_db_fn_memory_with_dir);
+    SUITE_ADD_TEST(suite, test_init_db_fn_memory_null_dir);
+
+    return suite;
+}
 
 static int run_tests(void)
 {
@@ -881,6 +943,7 @@ static int run_tests(void)
     CuSuiteAddSuite(suite, prepcache_add_get_suite());
     CuSuiteAddSuite(suite, prepcache_free_get_suite());
     CuSuiteAddSuite(suite, tag_file_get_suite());
+    CuSuiteAddSuite(suite, init_db_get_suite());
    
     CuSuiteRun(suite);
     CuSuiteSummary(suite, output);
