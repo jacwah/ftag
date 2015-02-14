@@ -810,8 +810,7 @@ static void test_tag_file_tag_exits(CuTest *tc)
                       );
     CuAssertIntEquals(tc, SQLITE_ROW, sqlite3_step(prep));
     CuAssertStrEquals(tc, "tag",
-                      // This cast is hopefully safe
-                      (const char *) sqlite3_column_text(prep, 1));
+                      (const char *) sqlite3_column_text(prep, 0));
     sqlite3_finalize(prep);
     close_db();
 
@@ -831,8 +830,7 @@ static void test_tag_file_file_exits(CuTest *tc)
                       );
     CuAssertIntEquals(tc, SQLITE_ROW, sqlite3_step(prep));
     CuAssertStrEquals(tc, "file",
-                      // This cast is hopefully safe
-                      (const char *)sqlite3_column_text(prep, 1));
+                      (const char *)sqlite3_column_text(prep, 0));
     // no more rows should be returned!!
     sqlite3_finalize(prep);
     close_db();
@@ -851,8 +849,8 @@ static void test_tag_file_xref_exits(CuTest *tc)
 
     // Since the in-memory database should be empty, both file and
     // tag should have been assigned id 1
+    CuAssertIntEquals(tc, 1, sqlite3_column_int(prep, 0));
     CuAssertIntEquals(tc, 1, sqlite3_column_int(prep, 1));
-    CuAssertIntEquals(tc, 1, sqlite3_column_int(prep, 2));
 
     sqlite3_finalize(prep);
 
