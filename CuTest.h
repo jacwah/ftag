@@ -1,3 +1,10 @@
+/*-------------------------------------------------------------------------*
+ * Copyright (c) 2003 Asim Jalis
+ *
+ * Additional modifications made by
+ * - Jacob Wahlgren 2015
+ *-------------------------------------------------------------------------*/
+
 #ifndef CU_TEST_H
 #define CU_TEST_H
 
@@ -46,12 +53,14 @@ struct CuTest
 	TestFunction function;
 	int failed;
 	int ran;
+	int parents;
 	const char* message;
 	jmp_buf *jumpBuf;
 };
 
 void CuTestInit(CuTest* t, const char* name, TestFunction function);
 CuTest* CuTestNew(const char* name, TestFunction function);
+CuTest* CuTestCopy(CuTest* t);
 void CuTestRun(CuTest* tc);
 void CuTestDelete(CuTest *t);
 
@@ -109,6 +118,7 @@ CuSuite* CuSuiteNew(void);
 void CuSuiteDelete(CuSuite *testSuite);
 void CuSuiteAdd(CuSuite* testSuite, CuTest *testCase);
 void CuSuiteAddSuite(CuSuite* testSuite, CuSuite* testSuite2);
+void CuSuiteConsume(CuSuite* testSuite, CuSuite* testSuite2);
 void CuSuiteRun(CuSuite* testSuite);
 void CuSuiteSummary(CuSuite* testSuite, CuString* summary);
 void CuSuiteDetails(CuSuite* testSuite, CuString* details);
