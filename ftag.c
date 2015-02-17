@@ -872,14 +872,14 @@ static CuSuite *tag_file_get_suite()
 
 static void test_init_db_fn_memory_with_dir(CuTest *tc)
 {
-    char dir[4 + 6];
+    char dir[5 + 6 + 1];
 
     if (dbconn != NULL) {
         close_db();
         dbconn = NULL;
     }
 
-    strncpy(dir, "ftagXXXXXX", sizeof(dir));
+    strncpy(dir, "ftag-XXXXXX", sizeof(dir));
     char *status = mkdtemp(dir);
     if (status == NULL)
         CuFail(tc, "Failed mkdtemp");
@@ -889,24 +889,24 @@ static void test_init_db_fn_memory_with_dir(CuTest *tc)
 
     int exists = access(":memory:", F_OK);
 
+	close_db();
     unlink(":memory:");
     chdir("..");
     rmdir(dir);
-    close_db();
 
     CuAssertIntEquals(tc, 0, exists);
 }
 
 static void test_init_db_fn_memory_null_dir(CuTest *tc)
 {
-    char dir[4 + 6];
+    char dir[5 + 6 + 1];
 
     if (dbconn != NULL) {
         close_db();
         dbconn = NULL;
     }
 
-    strncpy(dir, "ftagXXXXXX", sizeof(dir));
+    strncpy(dir, "ftag-XXXXXX", sizeof(dir));
     char *status = mkdtemp(dir);
     if (status == NULL)
         CuFail(tc, "Failed mkdtemp");
@@ -916,10 +916,10 @@ static void test_init_db_fn_memory_null_dir(CuTest *tc)
 
     int exists = access(":memory:", F_OK);
 
+	close_db();
     unlink(":memory:");
     chdir("..");
     rmdir(dir);
-    close_db();
 
     CuAssertIntEquals(tc, 0, exists);
 }
