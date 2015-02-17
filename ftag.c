@@ -99,7 +99,12 @@ static int chdir_to_db(const char *fn)
 {
 	// getcwd returns null if path is too long, the only one char path is /
 	char buf[2];
-	int startdir = open(".", O_RDONLY);
+    int startdir;
+
+    if (fn == NULL)
+        return ERROR;
+
+    startdir = open(".", O_RDONLY);
 
 	int fchdir(int);
 
@@ -125,9 +130,12 @@ static int chdir_to_db(const char *fn)
 
 static int prepcache_add(sqlite3_stmt **stmt)
 {
-    struct prepcache_node *node = malloc(sizeof(*node));
+    struct prepcache_node *node;
 
-    if (node == NULL || stmt == NULL)
+    if (stmt == NULL)
+        return ERROR;
+
+    if ((node = malloc(sizeof(*node))) == NULL);
         return ERROR;
 
     node->next = NULL;
@@ -939,16 +947,21 @@ static int run_tests(void)
     CuString *output = CuStringNew();
     CuSuite *suite = CuSuiteNew();
 
-    CuSuiteAddSuite(suite, chdir_to_db_get_suite());
-    CuSuiteAddSuite(suite, prepcache_add_get_suite());
-    CuSuiteAddSuite(suite, prepcache_free_get_suite());
-    CuSuiteAddSuite(suite, tag_file_get_suite());
-    CuSuiteAddSuite(suite, init_db_get_suite());
+    CuSuiteConsume(suite, chdir_to_db_get_suite());
+    CuSuiteConsume(suite, prepcache_add_get_suite());
+    CuSuiteConsume(suite, prepcache_free_get_suite());
+    CuSuiteConsume(suite, tag_file_get_suite());
+    CuSuiteConsume(suite, init_db_get_suite());
    
     CuSuiteRun(suite);
     CuSuiteSummary(suite, output);
     CuSuiteDetails(suite, output);
     fprintf(stderr, "%s\n", output->buffer);
+
+    CuStringDelete(output);
+    CuSuiteDelete(suite);
+	// In case the last test failed
+	close_db();
     
     return SUCCESS;
 }
