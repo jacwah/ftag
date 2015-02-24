@@ -283,6 +283,56 @@ void free_step(step_t *stmt)
 	assert(status == SQLITE_OK);
 }
 
+int *get_tag_ids(int tagc, const char **tagv)
+{
+	static const char *sql = "SELECT id FROM tag WHERE name=?;";
+	int *buf;
+
+	if (tagv == NULL)
+		return NULL;
+
+	buf = malloc(sizeof(int) * tagc);
+	if (buf == NULL)
+		return NULL;
+
+	for (int i = 0; i < tagc; i++) {
+		sqlite3_stmt *prep;
+
+		sqlite3_prepare_v2(dbconn, sql, -1, &prep, NULL);
+
+		if (prep == NULL)
+			return NULL;
+
+		if (sqlite3_bind_text(prep, 1, tagv[i], -1, SQLITE_STATIC) != SQLITE_OK)
+			goto error;
+
+		if (sqlite3_step(prep) != SQLITE_ROW)
+			goto error;
+
+		int count = sqlite3_column_count(prep);
+
+		if (count == 0) {
+			goto error;
+		} if (sqlite3_column_count(prep) > 1) {
+			fprintf(stderr, PROGRAM_NAME ": database corrupted\n");
+			goto error;
+		} else {
+			buf[i] = sqlite3_column_int(prep, 0);
+		}
+
+		continue;
+
+		error:
+		if (prep != NULL)
+			sqlite3_finalize(prep);
+		if (buf != NULL)
+			free(buf);
+		return NULL;
+	}
+
+	return buf;
+}
+
 step_t *filter_by_tag(const char *tag)
 {
 	static const char *sql_str = "SELECT DISTINCT file FROM Tag WHERE tag=? ORDER BY file;";
@@ -942,6 +992,39 @@ static CuSuite *init_db_get_suite()
     return suite;
 }
 
+static void test_get_tag_ids(CuTest *tc)
+{
+	static const char *insert_sql =
+	"BEGIN;"
+	"INSERT INTO tag (name) VALUES ('tag1');"
+	"INSERT INTO tag (name) VALUES ('tag2');"
+	"INSERT INTO tag (name) VALUES ('tag3');"
+	"COMMIT;"
+	;
+
+	setup_test_db(tc);
+
+	CuAssertIntEquals(tc, SQLITE_OK,
+					  sqlite3_exec(dbconn, insert_sql, NULL, NULL, NULL));
+
+	int *idv = get_tag_ids(3, (const char *[]) {"tag1", "tag2", "tag3"} );
+	CuAssertPtrNotNull(tc, idv);
+
+	for (int i = 0; i < 3; i++)
+		CuAssertIntEquals(tc, i+1, idv[i]);
+
+	close_db();
+}
+
+static CuSuite *get_tag_ids_get_suite()
+{
+	CuSuite *suite = CuSuiteNew();
+
+	SUITE_ADD_TEST(suite, test_get_tag_ids);
+
+	return suite;
+}
+
 static int run_tests(void)
 {
     CuString *output = CuStringNew();
@@ -952,6 +1035,7 @@ static int run_tests(void)
     CuSuiteConsume(suite, prepcache_free_get_suite());
     CuSuiteConsume(suite, tag_file_get_suite());
     CuSuiteConsume(suite, init_db_get_suite());
+	CuSuiteConsume(suite, get_tag_ids_get_suite());
    
     CuSuiteRun(suite);
     CuSuiteSummary(suite, output);
