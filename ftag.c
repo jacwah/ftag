@@ -283,6 +283,8 @@ void free_step(step_t *stmt)
 	assert(status == SQLITE_OK);
 }
 
+// Get id of all tags. If tag doesn't exist give value -1 (doesn't return
+// any rows)
 int *get_tag_ids(int tagc, const char **tagv)
 {
 	static const char *sql = "SELECT id FROM tag WHERE name=?;";
@@ -306,8 +308,15 @@ int *get_tag_ids(int tagc, const char **tagv)
 		if (sqlite3_bind_text(prep, 1, tagv[i], -1, SQLITE_STATIC) != SQLITE_OK)
 			goto error;
 
-		if (sqlite3_step(prep) != SQLITE_ROW)
-			goto error;
+		switch (sqlite3_step(prep)) {
+			case SQLITE_DONE:
+				buf[i] = -1;
+				continue;
+			case SQLITE_ROW:
+				break;
+			default:
+				goto error;
+		}
 
 		int count = sqlite3_column_count(prep);
 
