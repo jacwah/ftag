@@ -44,6 +44,10 @@
 
 #define PROGRAM_NAME "ftag"
 
+#define FILTER_ANY_TAG  (1<<0)
+#define FILTER_ALL_TAGS (1<<1)
+#define FILTER_ALL      (1<<2)
+
 enum mode {
 	MODE_NONE,
 	MODE_TAG_FILE,
@@ -342,72 +346,55 @@ int *get_tag_ids(int tagc, const char **tagv)
 	return buf;
 }
 
-step_t *filter_by_tag(const char *tag)
+step_t *filter_ids_any_tag(int tagc, int *tagv)
 {
-	static const char *sql_str = "SELECT DISTINCT file FROM Tag WHERE tag=? ORDER BY file;";
-	static const char *sql_str_all = "SELECT DISTINCT file FROM Tag ORDER BY file;";
-	sqlite3_stmt *sql_prep = NULL;
+	static const char *sql_base =
+	"SELECT DISTINCT f.relative_path FROM file AS f, file_tag AS x "
+	"WHERE f.id = x.file_id AND x.tag_id = ?";
+	char *sql_union = NULL;
+	sqlite3_stmt *prep = NULL;
 
-	// Only one statement in the sql, only one call to step
-	assert(strchr(sql_str, ';') == strrchr(sql_str, ';'));
+	sql_union = malloc(strlen(sql_base) * tagc +
+					   strlen(" UNION ") * (tagc - 1) + 1);
+	if (sql_union == NULL)
+		return NULL;
 
-	if (tag == NULL)
-		prepare(&sql_prep, sql_str_all);
-	else {
-		prepare(&sql_prep, sql_str);
+	strcpy(sql_union, sql_base);
+	for (int i = 1; i < tagc; i++) {
+		strcat(sql_union, " UNION ");
+		strcat(sql_union, sql_base);
+	}
+	strcat(sql_union, ";");
 
-		if (sqlite3_bind_text(sql_prep, 1, tag, -1, SQLITE_STATIC) != SQLITE_OK)
+
+	if (sqlite3_prepare_v2(dbconn, sql_union, -1, &prep, NULL) != SQLITE_OK)
+		return NULL;
+
+	for (int i = 0; i < tagc; i++) {
+		if (sqlite3_bind_int(prep, i+1, tagv[i]) != SQLITE_OK) {
+			sqlite3_finalize(prep);
 			return NULL;
+		}
 	}
 
-	return (step_t *) sql_prep;
+	return prep;
 }
 
-step_t *filter_by_tags(int tagc, char **tagv)
+step_t *filter_strs(int tagc, const char **tagv, int flags)
 {
-	static const char *sql_base_str = "SELECT DISTINCT file FROM Tag WHERE tag IN (?";
-	static const char *sql_end_str = ") ORDER BY file DESC;";
-	sqlite3_stmt *prep = NULL;
-	size_t sql_len = 0;
-	char *sql_str = NULL;
+	if (flags == 0)
+		return NULL;
 
-	assert(tagc > 0);
+	int *ids = get_tag_ids(tagc, tagv);
+	if (ids == NULL)
+		return NULL;
 
-	sql_len = strlen(sql_base_str) + strlen(sql_end_str) + 1;
-	sql_str = malloc(sql_len);
+	step_t *step = NULL;
 
-	if (sql_str == NULL)
-		goto mem_err;
+	if (flags & FILTER_ANY_TAG)
+		step = filter_ids_any_tag(tagc, ids);
 
-	strcpy(sql_str, sql_base_str);
-
-	for (int i = 1; i < tagc; i++) {
-		sql_str = realloc(sql_str, sql_len + 2);
-		sql_len += 2;
-
-		if (sql_str == NULL)
-			goto mem_err;
-
-		strcat(sql_str, ",?");
-	}
-
-	strcat(sql_str, sql_end_str);
-	prepare(&prep, sql_str);
-
-	if (sql_str != NULL)
-		free(sql_str);
-
-	for (int i = 0; i < tagc; i++)
-		if (sqlite3_bind_text(prep, i + 1, tagv[i], -1, SQLITE_TRANSIENT) != SQLITE_OK) {
-			fprintf(stderr, PROGRAM_NAME ": error binding SQLITE values\n");
-			exit(ERROR);
-		}
-
-	return (step_t *) prep;
-
-	mem_err:
-	fprintf(stderr, PROGRAM_NAME ": failed memory allocation, exiting\n");
-	exit(ERROR);
+	return step;
 }
 
 step_t *list_by_file(const char *file)
@@ -541,27 +528,22 @@ static int main_tag_file(int argc, char **argv)
 static int main_filter(int argc, char **argv)
 {
 	step_t *step = NULL;
+	int flags = 0;
 
 	assert(argv != NULL);
 
 	if (argc == 0) {
-		if ((step = filter_by_tag(NULL)) == NULL) {
-			fprintf(stderr, PROGRAM_NAME ": error while filtering tag\n");
-			return ERROR;
-		}
-	} else if (argc == 1) {
-		if ((step = filter_by_tag(argv[0])) == NULL) {
-			fprintf(stderr, PROGRAM_NAME ": error while filtering tag \n");
-			return ERROR;
-		}
+		flags |= FILTER_ALL;
 	} else {
-		if ((step = filter_by_tags(argc, argv)) == NULL) {
-			fprintf(stderr, PROGRAM_NAME ": error while filtering tag\n");
-			return ERROR;
-		}
+		flags |= FILTER_ANY_TAG;
 	}
 
-	if (step != NULL) {
+	step = filter_strs(argc, (const char **) argv, flags);
+
+	if (step == NULL) {
+		fprintf(stderr, PROGRAM_NAME ": error while filtering\n");
+		return ERROR;
+	} else {
 		const char *str = NULL;
 
 		while ((str = step_result(step)) != NULL)
