@@ -1016,6 +1016,70 @@ static CuSuite *get_tag_ids_get_suite()
 	return suite;
 }
 
+static void filter_setup_test_db(CuTest *tc)
+{
+	static char *insert_sql =
+	"BEGIN;"
+	"INSERT INTO tag (id, name) VALUES ('1', 'tag1');"
+	"INSERT INTO tag (id, name) VALUES ('2', 'tag2');"
+	"INSERT INTO file (id, relative_path) VALUES ('1', 'file1');"
+	"INSERT INTO file (id, relative_path) VALUES ('2', 'file2');"
+	"INSERT INTO file_tag (file_id, tag_id) VALUES ('1', '1');"
+	"INSERT INTO file_tag (file_id, tag_id) VALUES ('2', '1');"
+	"INSERT INTO file_tag (file_id, tag_id) VALUES ('2', '2');"
+	"COMMIT;"
+	;
+
+	setup_test_db(tc);
+
+	CuAssertIntEquals(tc, SQLITE_OK,
+					  sqlite3_exec(dbconn, insert_sql, NULL, NULL, NULL));
+}
+
+static void test_filter_ids_any_tag_one(CuTest *tc)
+{
+	int id2 = 2;
+	step_t *step = NULL;
+
+	filter_setup_test_db(tc);
+
+	step = filter_ids_any_tag(1, &id2);
+	CuAssertPtrNotNull(tc, step);
+	CuAssertStrEquals(tc, "file2", step_result(step));
+	CuAssertPtrEquals(tc, NULL, (void *) step_result(step));
+
+	free_step(step);
+	close_db();
+}
+
+static void test_filter_ids_any_tag_two(CuTest *tc)
+{
+	int ids[2] = { 1, 2 };
+	step_t *step = NULL;
+
+	filter_setup_test_db(tc);
+
+	step = filter_ids_any_tag(2, ids);
+	CuAssertPtrNotNull(tc, step);
+	// Counts on results being ordered
+	CuAssertStrEquals(tc, "file1", step_result(step));
+	CuAssertStrEquals(tc, "file2", step_result(step));
+	CuAssertPtrEquals(tc, NULL, (void *) step_result(step));
+
+	free_step(step);
+	close_db();
+}
+
+static CuSuite *filter_ids_any_tag_get_suite()
+{
+	CuSuite *suite = CuSuiteNew();
+
+	SUITE_ADD_TEST(suite, test_filter_ids_any_tag_one);
+	SUITE_ADD_TEST(suite, test_filter_ids_any_tag_two);
+
+	return suite;
+}
+
 static int run_tests(void)
 {
     CuString *output = CuStringNew();
@@ -1027,6 +1091,7 @@ static int run_tests(void)
     CuSuiteConsume(suite, tag_file_get_suite());
     CuSuiteConsume(suite, init_db_get_suite());
 	CuSuiteConsume(suite, get_tag_ids_get_suite());
+	CuSuiteConsume(suite, filter_ids_any_tag_get_suite());
    
     CuSuiteRun(suite);
     CuSuiteSummary(suite, output);
