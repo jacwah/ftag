@@ -380,19 +380,34 @@ step_t *filter_ids_any_tag(int tagc, int *tagv)
 	return prep;
 }
 
+step_t *filter_all(void)
+{
+	static const char *sql = "SELECT DISTINCT relative_path FROM file;";
+	sqlite3_stmt *prep = NULL;
+
+	if (sqlite3_prepare_v2(dbconn, sql, -1, &prep, NULL) != SQLITE_OK)
+		return NULL;
+	else
+		return prep;
+}
+
 step_t *filter_strs(int tagc, const char **tagv, int flags)
 {
+	step_t *step = NULL;
+
 	if (flags == 0)
 		return NULL;
 
-	int *ids = get_tag_ids(tagc, tagv);
-	if (ids == NULL)
-		return NULL;
+	if (flags & FILTER_ALL) {
+		step = filter_all();
+	} else {
+		int *ids = get_tag_ids(tagc, tagv);
+		if (ids == NULL)
+			return NULL;
 
-	step_t *step = NULL;
-
-	if (flags & FILTER_ANY_TAG)
-		step = filter_ids_any_tag(tagc, ids);
+		if (flags & FILTER_ANY_TAG)
+			step = filter_ids_any_tag(tagc, ids);
+	}
 
 	return step;
 }
