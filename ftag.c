@@ -39,10 +39,14 @@
 /***--- Constants and globals ---***/
 
 #ifndef DB_FILENAME
-#define DB_FILENAME ".ftagdb"
+#define DB_FILENAME ".ftag.sqlite3"
 #endif
 
 #define PROGRAM_NAME "ftag"
+
+#define FILTER_ANY_TAG  (1<<0)
+#define FILTER_ALL_TAGS (1<<1)
+#define FILTER_ALL      (1<<2)
 
 enum mode {
 	MODE_NONE,
@@ -50,14 +54,6 @@ enum mode {
 	MODE_FILTER,
 	MODE_LIST
 };
-
-/* The prepcache is a linked list of prepared statements freed atexit by close_db */
-struct prepcache_node {
-	sqlite3_stmt *stmt;
-	struct prepcache_node *next;
-};
-
-struct prepcache_node *prepcache = NULL;
 
 static sqlite3 *dbconn = NULL;
 
@@ -99,7 +95,12 @@ static int chdir_to_db(const char *fn)
 {
 	// getcwd returns null if path is too long, the only one char path is /
 	char buf[2];
-	int startdir = open(".", O_RDONLY);
+    int startdir;
+
+    if (fn == NULL)
+        return ERROR;
+
+    startdir = open(".", O_RDONLY);
 
 	int fchdir(int);
 
@@ -123,98 +124,51 @@ static int chdir_to_db(const char *fn)
 
 /***--- SQLite wrappers and helpers ---***/
 
-static int prepcache_add(sqlite3_stmt **stmt)
-{
-    struct prepcache_node *node = malloc(sizeof(*node));
-
-    if (node == NULL || stmt == NULL)
-        return ERROR;
-
-    node->next = NULL;
-    node->stmt = *stmt;
-
-    if (prepcache != NULL) {
-        struct prepcache_node *walk = prepcache;
-
-        while (walk->next != NULL)
-            walk = walk->next;
-
-        walk->next = node;
-    } else
-        prepcache = node;
-
-    return SUCCESS;
-}
-
-static void prepcache_free(void)
-{
-    while (prepcache != NULL) {
-        struct prepcache_node *tmp = prepcache->next;
-
-        sqlite3_finalize(prepcache->stmt);
-        prepcache->stmt = NULL;
-        free(prepcache);
-        prepcache = tmp;
-    }
-}
-
-/* If the stmt is null, prepare it with str, otherwise call reset on it. The stmt is freed atexit. */
-static int prepare_or_reset(sqlite3_stmt **prep, const char *str)
-{
-	if (*prep == NULL) {
-		int status = sqlite3_prepare_v2(dbconn, str, -1, prep, NULL);
-
-		if (status != SQLITE_OK) {
-			fprintf(stderr, PROGRAM_NAME ": error: failed preparation of SQL"
-                    "statement (%d)\n\"%s\"\n", status, str);
-
-			exit(1);
-		} else {
-            prepcache_add(prep);
-
-			assert(*prep != NULL);
-
-			return SUCCESS;
-		}
-	} else {
-		sqlite3_reset(*prep);
-
-		return SUCCESS;
-	}
-}
-
-/* Prepare a statement, must be finalized. */
-static int prepare(sqlite3_stmt **prep, const char *str)
-{
-	int status = sqlite3_prepare_v2(dbconn, str, -1, prep, NULL);
-
-	if (status != SQLITE_OK) {
-		fprintf(stderr, "error: failed preparation of SQL statement (%d)\n", status);
-
-		exit(1);
-	} else {
-		return SUCCESS;
-	}
-}
-
 int tag_file(const char *file, const char *tag)
 {
-	static const char *sql_str = "INSERT OR IGNORE INTO Tag VALUES (?, ?);";
-	static sqlite3_stmt *sql_prep = NULL;
+	static const char *sql_str =
+    "BEGIN;"
+    "INSERT OR IGNORE INTO tag (name) VALUES (:tag);"
+    "INSERT OR IGNORE INTO file (relative_path) VALUES (:file);"
+    "INSERT INTO file_tag (file_id, tag_id) SELECT file.id, tag.id FROM "
+    "file, tag WHERE file.relative_path = :file AND tag.name = :tag;"
+    "COMMIT;"
+    ;
 
-	// Only one statement in the sql, only one call to step
-	assert(strchr(sql_str, ';') == strrchr(sql_str, ';'));
+	sqlite3_stmt *sql_prep = NULL;
+    const char *sql_unread = sql_str;
 
-	prepare_or_reset(&sql_prep, sql_str);
+    if (file == NULL || tag == NULL)
+        return ERROR;
 
-	if (sqlite3_bind_text(sql_prep, 1, file, -1, SQLITE_STATIC) != SQLITE_OK ||
-		sqlite3_bind_text(sql_prep, 2, tag, -1, SQLITE_STATIC) != SQLITE_OK)
-		return ERROR;
+    // Prepare, bind and execute one statement at a time
+    while (sql_unread < sql_str + strlen(sql_str)) {
+        int status = sqlite3_prepare_v2(dbconn, sql_unread, -1, &sql_prep, &sql_unread);
+        if (status != SQLITE_OK)
+            return ERROR;
 
-	if (sqlite3_step(sql_prep) != SQLITE_DONE)
-		return ERROR;
+        // Is 0 if parameter doesn't exist in this statement
+        int file_index = sqlite3_bind_parameter_index(sql_prep, ":file");
+        int tag_index = sqlite3_bind_parameter_index(sql_prep, ":tag");
 
-	return SUCCESS;
+        if (file_index > 0)
+            if (sqlite3_bind_text(sql_prep, file_index, file, -1, SQLITE_STATIC)
+                != SQLITE_OK)
+                return ERROR;
+
+        if (tag_index > 0)
+            if (sqlite3_bind_text(sql_prep, tag_index, tag, -1, SQLITE_STATIC)
+                != SQLITE_OK)
+                return ERROR;
+
+        if (sqlite3_step(sql_prep) != SQLITE_DONE)
+            return ERROR;
+
+        sqlite3_finalize(sql_prep);
+        sql_prep = NULL;
+    }
+
+    return SUCCESS;
 }
 
 const char *step_result(step_t *stmt)
@@ -249,136 +203,247 @@ void free_step(step_t *stmt)
 	assert(status == SQLITE_OK);
 }
 
-step_t *filter_by_tag(const char *tag)
+// Get id of all tags. If tag doesn't exist give value -1 (doesn't return
+// any rows)
+int *get_tag_ids(int tagc, const char **tagv)
 {
-	static const char *sql_str = "SELECT DISTINCT file FROM Tag WHERE tag=? ORDER BY file;";
-	static const char *sql_str_all = "SELECT DISTINCT file FROM Tag ORDER BY file;";
-	sqlite3_stmt *sql_prep = NULL;
+	static const char *sql = "SELECT id FROM tag WHERE name=?;";
+	int *buf;
 
-	// Only one statement in the sql, only one call to step
-	assert(strchr(sql_str, ';') == strrchr(sql_str, ';'));
+	if (tagv == NULL)
+		return NULL;
 
-	if (tag == NULL)
-		prepare(&sql_prep, sql_str_all);
-	else {
-		prepare(&sql_prep, sql_str);
+	buf = malloc(sizeof(int) * tagc);
+	if (buf == NULL)
+		return NULL;
 
-		if (sqlite3_bind_text(sql_prep, 1, tag, -1, SQLITE_STATIC) != SQLITE_OK)
+	for (int i = 0; i < tagc; i++) {
+		sqlite3_stmt *prep;
+
+		sqlite3_prepare_v2(dbconn, sql, -1, &prep, NULL);
+
+		if (prep == NULL)
 			return NULL;
-	}
 
-	return (step_t *) sql_prep;
-}
+		if (sqlite3_bind_text(prep, 1, tagv[i], -1, SQLITE_STATIC) != SQLITE_OK)
+			goto error;
 
-step_t *filter_by_tags(int tagc, char **tagv)
-{
-	static const char *sql_base_str = "SELECT DISTINCT file FROM Tag WHERE tag IN (?";
-	static const char *sql_end_str = ") ORDER BY file DESC;";
-	sqlite3_stmt *prep = NULL;
-	size_t sql_len = 0;
-	char *sql_str = NULL;
-
-	assert(tagc > 0);
-
-	sql_len = strlen(sql_base_str) + strlen(sql_end_str) + 1;
-	sql_str = malloc(sql_len);
-
-	if (sql_str == NULL)
-		goto mem_err;
-
-	strcpy(sql_str, sql_base_str);
-
-	for (int i = 1; i < tagc; i++) {
-		sql_str = realloc(sql_str, sql_len + 2);
-		sql_len += 2;
-
-		if (sql_str == NULL)
-			goto mem_err;
-
-		strcat(sql_str, ",?");
-	}
-
-	strcat(sql_str, sql_end_str);
-	prepare(&prep, sql_str);
-
-	if (sql_str != NULL)
-		free(sql_str);
-
-	for (int i = 0; i < tagc; i++)
-		if (sqlite3_bind_text(prep, i + 1, tagv[i], -1, SQLITE_TRANSIENT) != SQLITE_OK) {
-			fprintf(stderr, PROGRAM_NAME ": error binding SQLITE values\n");
-			exit(ERROR);
+		switch (sqlite3_step(prep)) {
+			case SQLITE_DONE:
+				buf[i] = -1;
+				continue;
+			case SQLITE_ROW:
+				break;
+			default:
+				goto error;
 		}
 
-	return (step_t *) prep;
+		int count = sqlite3_column_count(prep);
 
-	mem_err:
-	fprintf(stderr, PROGRAM_NAME ": failed memory allocation, exiting\n");
-	exit(ERROR);
-}
+		if (count == 0) {
+			goto error;
+		} if (sqlite3_column_count(prep) > 1) {
+			fprintf(stderr, PROGRAM_NAME ": database corrupted\n");
+			goto error;
+		} else {
+			buf[i] = sqlite3_column_int(prep, 0);
+		}
 
-step_t *list_by_file(const char *file)
-{
-	static const char *sql_str = "SELECT DISTINCT tag FROM Tag WHERE file=? ORDER BY tag;";
-	static const char *sql_str_all = "SELECT DISTINCT tag FROM Tag ORDER BY tag;";
-	sqlite3_stmt *sql_prep = NULL;
+		continue;
 
-	// Only one statement in the sql, only one call to step
-	assert(strchr(sql_str, ';') == strrchr(sql_str, ';'));
-
-	if (file == NULL)
-		prepare(&sql_prep, sql_str_all);
-	else {
-		prepare(&sql_prep, sql_str);
-
-		if (sqlite3_bind_text(sql_prep, 1, file, -1, SQLITE_STATIC) != SQLITE_OK)
-			return NULL;
+		error:
+		if (prep != NULL)
+			sqlite3_finalize(prep);
+		if (buf != NULL)
+			free(buf);
+		return NULL;
 	}
 
-	return (step_t *) sql_prep;
+	return buf;
+}
+
+step_t *filter_ids_any_tag(int tagc, int *tagv)
+{
+	static const char *sql_base =
+	"SELECT DISTINCT f.relative_path FROM file AS f, file_tag AS x "
+	"WHERE f.id = x.file_id AND x.tag_id = ?";
+	char *sql_union = NULL;
+	sqlite3_stmt *prep = NULL;
+
+	sql_union = malloc(strlen(sql_base) * tagc +
+					   strlen(" UNION ") * (tagc - 1) + 1 + 1);
+	if (sql_union == NULL)
+		return NULL;
+
+	strcpy(sql_union, sql_base);
+	for (int i = 1; i < tagc; i++) {
+		strcat(sql_union, " UNION ");
+		strcat(sql_union, sql_base);
+	}
+	strcat(sql_union, ";");
+
+
+	if (sqlite3_prepare_v2(dbconn, sql_union, -1, &prep, NULL) != SQLITE_OK)
+		prep = NULL;
+
+	for (int i = 0; i < tagc; i++) {
+		if (sqlite3_bind_int(prep, i+1, tagv[i]) != SQLITE_OK) {
+			sqlite3_finalize(prep);
+			prep = NULL;
+			break;
+		}
+	}
+
+	free(sql_union);
+
+	return prep;
+}
+
+step_t *filter_all(void)
+{
+	static const char *sql = "SELECT DISTINCT relative_path FROM file;";
+	sqlite3_stmt *prep = NULL;
+
+	if (sqlite3_prepare_v2(dbconn, sql, -1, &prep, NULL) != SQLITE_OK)
+		return NULL;
+	else
+		return prep;
+}
+
+step_t *filter_strs(int tagc, const char **tagv, int flags)
+{
+	step_t *step = NULL;
+
+	if (flags == 0)
+		return NULL;
+
+	if (flags & FILTER_ALL) {
+		step = filter_all();
+	} else {
+		int *ids = get_tag_ids(tagc, tagv);
+		if (ids == NULL)
+			return NULL;
+
+		if (flags & FILTER_ANY_TAG)
+			step = filter_ids_any_tag(tagc, ids);
+
+		free(ids);
+	}
+
+	return step;
+}
+
+step_t *list_by_file(const char *path)
+{
+	static const char *sql = "SELECT DISTINCT t.name FROM tag AS t, file AS f, "
+	"file_tag AS x WHERE t.id = x.tag_id AND x.file_id = f.id AND "
+	"f.relative_path = ?;";
+	sqlite3_stmt *prep = NULL;
+
+	if (sqlite3_prepare_v2(dbconn, sql, -1, &prep, NULL) != SQLITE_OK)
+		return NULL;
+
+	if (sqlite3_bind_text(prep, 1, path, -1, SQLITE_TRANSIENT) != SQLITE_OK) {
+		sqlite3_finalize(prep);
+		prep = NULL;
+	}
+
+	return prep;
+}
+
+step_t *list_all_tags(void)
+{
+	static const char *sql = "SELECT DISTINCT name FROM tag;";
+	sqlite3_stmt *prep = NULL;
+
+	if (sqlite3_prepare_v2(dbconn, sql, -1, &prep, NULL) != SQLITE_OK)
+		return NULL;
+
+	return prep;
 }
 
 static void close_db(void)
 {
-    prepcache_free();
-
 	if (dbconn != NULL) {
 		sqlite3_close(dbconn);
 		dbconn = NULL;
 	}
 }
 
+static int run_init_db_sql() {
+    static char *init_sql =
+    "BEGIN IMMEDIATE;"
+    "CREATE TABLE file ( id INTEGER PRIMARY KEY, relative_path TEXT );"
+    "CREATE TABLE tag ( id INTEGER PRIMARY KEY, name TEXT );"
+    "CREATE TABLE file_tag ( file_id INTEGER, tag_id INTEGER );"
+
+    "CREATE UNIQUE INDEX file_path_uq ON file (relative_path);"
+    "CREATE UNIQUE INDEX tag_name_uq ON tag (name);"
+    "CREATE UNIQUE INDEX file_tag_uq ON file_tag (file_id, tag_id);"
+    "COMMIT;"
+    ;
+
+    return sqlite3_exec(dbconn, init_sql, NULL, NULL, NULL);
+}
+
 /* Open and init database, or search for DB_FILENAME if (fn == NULL) and with chdir_to_db if (dir == NULL)
  * The database is freed atexit
+ * If fn is :memory: and dir is NULL it will open an in-memory database
  */
 int init_db(char *fn, char *dir)
 {
-	static char *init_sql = "CREATE TABLE IF NOT EXISTS Tag (file varchar(256) NOT NULL, tag varchar(256) NOT NULL);"
-	"CREATE UNIQUE INDEX IF NOT EXISTS uq_Tag on Tag (file, tag);";
-
 	if (dbconn != NULL)
 		return ERROR;
 
-	if (fn == NULL)
+    if (fn == NULL) {
 		fn = DB_FILENAME;
+    // Do not accidentaly open memory db
+    } else if (strcmp(":memory:", fn) == 0) {
+        fn = "./:memory:";
+    }
 
-	if (dir == NULL)
-		chdir_to_db(fn);
-	else
-		if (chdir(dir) != 0) {
-			fprintf(stderr, PROGRAM_NAME ": failed to change to dir '%s'\n", dir);
-			exit(ERROR);
-		}
+    if (dir == NULL) {
+        chdir_to_db(fn);
+    } else {
+        if (chdir(dir) != 0) {
+            fprintf(stderr, PROGRAM_NAME ": failed to change to dir '%s'\n", dir);
+            exit(ERROR);
+        }
+    }
 
-	if (sqlite3_open(fn, &dbconn) != SQLITE_OK)
-		return ERROR;
+    // Return error if database doesn't already exist
+    int status = sqlite3_open_v2(fn, &dbconn, SQLITE_OPEN_READWRITE, NULL);
+
+    if (status != SQLITE_OK) {
+        status = sqlite3_open_v2(fn, &dbconn, SQLITE_OPEN_READWRITE |
+                                 SQLITE_OPEN_CREATE, NULL);
+        if (status != SQLITE_OK)
+            return ERROR;
+        else {
+            status = run_init_db_sql();
+            if (status != SQLITE_OK)
+                return ERROR;
+        }
+    }
 
 	atexit(close_db);
 
-	if (sqlite3_exec(dbconn, init_sql, NULL, NULL, NULL) != SQLITE_OK)
-		return ERROR;
-	else
-		return SUCCESS;
+    return SUCCESS;
+}
+
+/* Same as init_db, but use a volatile in-memory database instead of on disk */
+int init_memory_db(void) {
+    if (dbconn != NULL)
+        return ERROR;
+
+    int status = sqlite3_open_v2(":memory:", &dbconn,
+                                 SQLITE_OPEN_READWRITE, NULL);
+    if (status != SQLITE_OK)
+        return ERROR;
+    else if (run_init_db_sql() != SQLITE_OK)
+        return ERROR;
+    else
+        return SUCCESS;
 }
 
 /***--- Entry points ---***/
@@ -405,27 +470,22 @@ static int main_tag_file(int argc, char **argv)
 static int main_filter(int argc, char **argv)
 {
 	step_t *step = NULL;
+	int flags = 0;
 
 	assert(argv != NULL);
 
 	if (argc == 0) {
-		if ((step = filter_by_tag(NULL)) == NULL) {
-			fprintf(stderr, PROGRAM_NAME ": error while filtering tag\n");
-			return ERROR;
-		}
-	} else if (argc == 1) {
-		if ((step = filter_by_tag(argv[0])) == NULL) {
-			fprintf(stderr, PROGRAM_NAME ": error while filtering tag \n");
-			return ERROR;
-		}
+		flags |= FILTER_ALL;
 	} else {
-		if ((step = filter_by_tags(argc, argv)) == NULL) {
-			fprintf(stderr, PROGRAM_NAME ": error while filtering tag\n");
-			return ERROR;
-		}
+		flags |= FILTER_ANY_TAG;
 	}
 
-	if (step != NULL) {
+	step = filter_strs(argc, (const char **) argv, flags);
+
+	if (step == NULL) {
+		fprintf(stderr, PROGRAM_NAME ": error while filtering\n");
+		return ERROR;
+	} else {
 		const char *str = NULL;
 
 		while ((str = step_result(step)) != NULL)
@@ -444,7 +504,7 @@ static int main_list(int argc, char **argv)
 	assert(argv != NULL);
 
 	if (argc == 0)
-		step = list_by_file(NULL);
+		step = list_all_tags();
 	else if (argc == 1)
 		step = list_by_file(argv[0]);
 	else {
@@ -576,6 +636,13 @@ int main(int argc, char **argv)
 
 /***--- Tests ---***/
 
+static void setup_test_db(CuTest *tc) {
+    // When tests fail, they won't be able to close_db
+    if (dbconn != NULL)
+        close_db();
+    CuAssertIntEquals(tc, SUCCESS, init_memory_db());
+}
+
 static void test_chdir_to_db_null_return(CuTest *tc)
 {
     CuAssertIntEquals(tc, ERROR, chdir_to_db(NULL));
@@ -603,108 +670,252 @@ static CuSuite *chdir_to_db_get_suite()
     return suite;
 }
 
-static void test_prepcache_add_null_stmt_empty(CuTest *tc)
+static void test_tag_file_null_file(CuTest *tc)
 {
-    // empty prepcache
-    CuAssertIntEquals(tc, ERROR, prepcache_add(NULL));
+    setup_test_db(tc);
+    CuAssertIntEquals(tc, ERROR, tag_file(NULL, "tag"));
+    close_db();
 }
 
-static void test_prepcache_add_null_stmt(CuTest *tc)
+static void test_tag_file_null_tag(CuTest *tc)
 {
-    // non empty prepcache
-    prepcache = malloc(sizeof(*prepcache));
+    setup_test_db(tc);
+    CuAssertIntEquals(tc, ERROR, tag_file("file", NULL));
+    close_db();
+}
 
-    if (prepcache == NULL) {
-        fprintf(stderr, PROGRAM_NAME ": failed malloc call\n");
-        exit(1);
+static void test_tag_file_tag_exits(CuTest *tc)
+{
+    sqlite3_stmt *prep = NULL;
+
+    setup_test_db(tc);
+
+    CuAssertIntEquals(tc, SUCCESS, tag_file("file", "tag"));
+    CuAssertIntEquals(tc, SQLITE_OK,
+                      sqlite3_prepare_v2(dbconn, "SELECT name FROM tag;", -1,
+                                         &prep, NULL)
+                      );
+    CuAssertIntEquals(tc, SQLITE_ROW, sqlite3_step(prep));
+    CuAssertStrEquals(tc, "tag",
+                      (const char *) sqlite3_column_text(prep, 0));
+    sqlite3_finalize(prep);
+    close_db();
+
+}
+
+static void test_tag_file_file_exits(CuTest *tc)
+{
+    sqlite3_stmt *prep = NULL;
+
+    setup_test_db(tc);
+
+    CuAssertIntEquals(tc, SUCCESS, tag_file("file", "tag"));
+    CuAssertIntEquals(tc, SQLITE_OK,
+                      sqlite3_prepare_v2(dbconn,
+                                         "SELECT relative_path FROM file;", -1,
+                                         &prep, NULL)
+                      );
+    CuAssertIntEquals(tc, SQLITE_ROW, sqlite3_step(prep));
+    CuAssertStrEquals(tc, "file",
+                      (const char *)sqlite3_column_text(prep, 0));
+    // no more rows should be returned!!
+    sqlite3_finalize(prep);
+    close_db();
+}
+
+static void test_tag_file_xref_exits(CuTest *tc)
+{
+    sqlite3_stmt *prep = NULL;
+
+    setup_test_db(tc);
+
+    CuAssertIntEquals(tc, SUCCESS, tag_file("file", "tag"));
+    sqlite3_prepare_v2(dbconn, "SELECT file_id, tag_id FROM file_tag;", -1,
+                       &prep, NULL);
+    CuAssertIntEquals(tc, SQLITE_ROW, sqlite3_step(prep));
+
+    // Since the in-memory database should be empty, both file and
+    // tag should have been assigned id 1
+    CuAssertIntEquals(tc, 1, sqlite3_column_int(prep, 0));
+    CuAssertIntEquals(tc, 1, sqlite3_column_int(prep, 1));
+
+    sqlite3_finalize(prep);
+
+    close_db();
+}
+
+static CuSuite *tag_file_get_suite()
+{
+    CuSuite *suite = CuSuiteNew();
+
+    SUITE_ADD_TEST(suite, test_tag_file_null_file);
+    SUITE_ADD_TEST(suite, test_tag_file_null_tag);
+    SUITE_ADD_TEST(suite, test_tag_file_tag_exits);
+    SUITE_ADD_TEST(suite, test_tag_file_file_exits);
+    SUITE_ADD_TEST(suite, test_tag_file_xref_exits);
+
+    return suite;
+}
+
+static void test_init_db_fn_memory_with_dir(CuTest *tc)
+{
+    char dir[5 + 6 + 1];
+
+    if (dbconn != NULL) {
+        close_db();
+        dbconn = NULL;
     }
 
-    prepcache->stmt = NULL;
-    prepcache->next = NULL;
+    strncpy(dir, "ftag-XXXXXX", sizeof(dir));
+    char *status = mkdtemp(dir);
+    if (status == NULL)
+        CuFail(tc, "Failed mkdtemp");
 
-    CuAssertIntEquals(tc, ERROR, prepcache_add(NULL));
+    CuAssertIntEquals(tc, SUCCESS, init_db(":memory:", dir));
+    chdir(dir);
 
-    free(prepcache);
-    prepcache = NULL;
+    int exists = access(":memory:", F_OK);
+
+	close_db();
+    unlink(":memory:");
+    chdir("..");
+    rmdir(dir);
+
+    CuAssertIntEquals(tc, 0, exists);
 }
 
-static CuSuite *prepcache_add_get_suite()
+static void test_init_db_fn_memory_null_dir(CuTest *tc)
+{
+    char dir[5 + 6 + 1];
+
+    if (dbconn != NULL) {
+        close_db();
+        dbconn = NULL;
+    }
+
+    strncpy(dir, "ftag-XXXXXX", sizeof(dir));
+    char *status = mkdtemp(dir);
+    if (status == NULL)
+        CuFail(tc, "Failed mkdtemp");
+
+    chdir(dir);
+    CuAssertIntEquals(tc, SUCCESS, init_db(":memory:", NULL));
+
+    int exists = access(":memory:", F_OK);
+
+	close_db();
+    unlink(":memory:");
+    chdir("..");
+    rmdir(dir);
+
+    CuAssertIntEquals(tc, 0, exists);
+}
+
+static CuSuite *init_db_get_suite()
 {
     CuSuite *suite = CuSuiteNew();
 
-    SUITE_ADD_TEST(suite, test_prepcache_add_null_stmt_empty);
-    SUITE_ADD_TEST(suite, test_prepcache_add_null_stmt);
+    SUITE_ADD_TEST(suite, test_init_db_fn_memory_with_dir);
+    SUITE_ADD_TEST(suite, test_init_db_fn_memory_null_dir);
 
     return suite;
 }
 
-static void test_prepcache_free_when_null(CuTest *tc)
+static void test_get_tag_ids(CuTest *tc)
 {
-    assert(prepcache == NULL);
-    prepcache_free();
-    CuAssertPtrEquals(tc, NULL, prepcache);
+	static const char *insert_sql =
+	"BEGIN;"
+	"INSERT INTO tag (name) VALUES ('tag1');"
+	"INSERT INTO tag (name) VALUES ('tag2');"
+	"INSERT INTO tag (name) VALUES ('tag3');"
+	"COMMIT;"
+	;
+
+	setup_test_db(tc);
+
+	CuAssertIntEquals(tc, SQLITE_OK,
+					  sqlite3_exec(dbconn, insert_sql, NULL, NULL, NULL));
+
+	int *idv = get_tag_ids(3, (const char *[]) {"tag1", "tag2", "tag3"} );
+	CuAssertPtrNotNull(tc, idv);
+
+	for (int i = 0; i < 3; i++)
+		CuAssertIntEquals(tc, i+1, idv[i]);
+
+	close_db();
 }
 
-static void test_prepcache_free_one_node(CuTest *tc)
+static CuSuite *get_tag_ids_get_suite()
 {
-    sqlite3 *db;
-    const char *str = "CREATE TABLE IF NOT EXISTS Tag (file varchar(256) NOT NULL, tag varchar(256) NOT NULL);";
+	CuSuite *suite = CuSuiteNew();
 
-    CuAssertIntEquals(tc, SQLITE_OK, sqlite3_open(":memory:", &db));
-    prepcache = malloc(sizeof(*prepcache));
+	SUITE_ADD_TEST(suite, test_get_tag_ids);
 
-    sqlite3_prepare_v2(db, str, -1, &prepcache->stmt, NULL);
-    prepcache->next = NULL;
-
-    prepcache_free();
-
-    CuAssertPtrEquals(tc, NULL, prepcache);
-
-    sqlite3_close(db);
+	return suite;
 }
 
-static void test_prepcache_free_multiple(CuTest *tc)
+static void filter_setup_test_db(CuTest *tc)
 {
-    sqlite3 *db;
+	static char *insert_sql =
+	"BEGIN;"
+	"INSERT INTO tag (id, name) VALUES ('1', 'tag1');"
+	"INSERT INTO tag (id, name) VALUES ('2', 'tag2');"
+	"INSERT INTO file (id, relative_path) VALUES ('1', 'file1');"
+	"INSERT INTO file (id, relative_path) VALUES ('2', 'file2');"
+	"INSERT INTO file_tag (file_id, tag_id) VALUES ('1', '1');"
+	"INSERT INTO file_tag (file_id, tag_id) VALUES ('2', '1');"
+	"INSERT INTO file_tag (file_id, tag_id) VALUES ('2', '2');"
+	"COMMIT;"
+	;
 
-    CuAssertIntEquals(tc, SQLITE_OK, sqlite3_open(":memory:", &db));
+	setup_test_db(tc);
 
-    prepcache = malloc(sizeof(*prepcache));
-    sqlite3_prepare_v2(db, "CREATE TABLE IF NOT EXISTS Tag (file varchar(256) NOT NULL, tag varchar(256) NOT NULL);", -1, &prepcache->stmt, NULL);
-    if (prepcache == NULL) goto mem_err;
-
-    prepcache->next = malloc(sizeof(*prepcache));
-    sqlite3_prepare_v2(db, "CREATE UNIQUE INDEX IF NOT EXISTS uq_Tag on Tag (file, tag);", -1, &prepcache->next->stmt, NULL);
-    if (prepcache->next == NULL) goto mem_err;
-
-    prepcache->next->next = malloc(sizeof(*prepcache));
-    sqlite3_prepare_v2(db, "SELECT DISTINCT tag FROM Tag ORDER BY tag;", -1,
-        &prepcache->next->next->stmt, NULL);
-    if (prepcache->next->next == NULL) goto mem_err;
-    prepcache->next->next->next = NULL;
-
-    prepcache_free();
-
-    CuAssertPtrEquals(tc, NULL, prepcache);
-
-    sqlite3_close(db);
-
-    return;
-
-mem_err:
-    fprintf(stderr, PROGRAM_NAME ": failed malloc call\n");
-    exit(1);
+	CuAssertIntEquals(tc, SQLITE_OK,
+					  sqlite3_exec(dbconn, insert_sql, NULL, NULL, NULL));
 }
 
-static CuSuite *prepcache_free_get_suite()
+static void test_filter_ids_any_tag_one(CuTest *tc)
 {
-    CuSuite *suite = CuSuiteNew();
+	int id2 = 2;
+	step_t *step = NULL;
 
-    SUITE_ADD_TEST(suite, test_prepcache_free_when_null);
-    SUITE_ADD_TEST(suite, test_prepcache_free_one_node);
-    SUITE_ADD_TEST(suite, test_prepcache_free_multiple);
+	filter_setup_test_db(tc);
 
-    return suite;
+	step = filter_ids_any_tag(1, &id2);
+	CuAssertPtrNotNull(tc, step);
+	CuAssertStrEquals(tc, "file2", step_result(step));
+	CuAssertPtrEquals(tc, NULL, (void *) step_result(step));
+
+	free_step(step);
+	close_db();
+}
+
+static void test_filter_ids_any_tag_two(CuTest *tc)
+{
+	int ids[2] = { 1, 2 };
+	step_t *step = NULL;
+
+	filter_setup_test_db(tc);
+
+	step = filter_ids_any_tag(2, ids);
+	CuAssertPtrNotNull(tc, step);
+	// Counts on results being ordered
+	CuAssertStrEquals(tc, "file1", step_result(step));
+	CuAssertStrEquals(tc, "file2", step_result(step));
+	CuAssertPtrEquals(tc, NULL, (void *) step_result(step));
+
+	free_step(step);
+	close_db();
+}
+
+static CuSuite *filter_ids_any_tag_get_suite()
+{
+	CuSuite *suite = CuSuiteNew();
+
+	SUITE_ADD_TEST(suite, test_filter_ids_any_tag_one);
+	SUITE_ADD_TEST(suite, test_filter_ids_any_tag_two);
+
+	return suite;
 }
 
 static int run_tests(void)
@@ -712,14 +923,21 @@ static int run_tests(void)
     CuString *output = CuStringNew();
     CuSuite *suite = CuSuiteNew();
 
-    CuSuiteAddSuite(suite, chdir_to_db_get_suite());
-    CuSuiteAddSuite(suite, prepcache_add_get_suite());
-    CuSuiteAddSuite(suite, prepcache_free_get_suite());
+    CuSuiteConsume(suite, chdir_to_db_get_suite());
+    CuSuiteConsume(suite, tag_file_get_suite());
+    CuSuiteConsume(suite, init_db_get_suite());
+	CuSuiteConsume(suite, get_tag_ids_get_suite());
+	CuSuiteConsume(suite, filter_ids_any_tag_get_suite());
    
     CuSuiteRun(suite);
     CuSuiteSummary(suite, output);
     CuSuiteDetails(suite, output);
     fprintf(stderr, "%s\n", output->buffer);
+
+    CuStringDelete(output);
+    CuSuiteDelete(suite);
+	// In case the last test failed
+	close_db();
     
     return SUCCESS;
 }
