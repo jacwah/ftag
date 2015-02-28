@@ -39,7 +39,7 @@
 /***--- Constants and globals ---***/
 
 #ifndef DB_FILENAME
-#define DB_FILENAME ".ftagdb"
+#define DB_FILENAME ".ftag.sqlite3"
 #endif
 
 #define PROGRAM_NAME "ftag"
