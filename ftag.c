@@ -271,7 +271,7 @@ step_t *filter_ids_any_tag(int tagc, int *tagv)
 	sqlite3_stmt *prep = NULL;
 
 	sql_union = malloc(strlen(sql_base) * tagc +
-					   strlen(" UNION ") * (tagc - 1) + 1);
+					   strlen(" UNION ") * (tagc - 1) + 1 + 1);
 	if (sql_union == NULL)
 		return NULL;
 
@@ -284,14 +284,17 @@ step_t *filter_ids_any_tag(int tagc, int *tagv)
 
 
 	if (sqlite3_prepare_v2(dbconn, sql_union, -1, &prep, NULL) != SQLITE_OK)
-		return NULL;
+		prep = NULL;
 
 	for (int i = 0; i < tagc; i++) {
 		if (sqlite3_bind_int(prep, i+1, tagv[i]) != SQLITE_OK) {
 			sqlite3_finalize(prep);
-			return NULL;
+			prep = NULL;
+			break;
 		}
 	}
+
+	free(sql_union);
 
 	return prep;
 }
@@ -323,6 +326,8 @@ step_t *filter_strs(int tagc, const char **tagv, int flags)
 
 		if (flags & FILTER_ANY_TAG)
 			step = filter_ids_any_tag(tagc, ids);
+
+		free(ids);
 	}
 
 	return step;
