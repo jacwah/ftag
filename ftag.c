@@ -397,25 +397,33 @@ step_t *filter_strs(int tagc, const char **tagv, int flags)
 	return step;
 }
 
-step_t *list_by_file(const char *file)
+step_t *list_by_file(const char *path)
 {
-	static const char *sql_str = "SELECT DISTINCT tag FROM Tag WHERE file=? ORDER BY tag;";
-	static const char *sql_str_all = "SELECT DISTINCT tag FROM Tag ORDER BY tag;";
-	sqlite3_stmt *sql_prep = NULL;
+	static const char *sql = "SELECT DISTINCT t.name FROM tag AS t, file AS f, "
+	"file_tag AS x WHERE t.id = x.tag_id AND x.file_id = f.id AND "
+	"f.relative_path = ?;";
+	sqlite3_stmt *prep = NULL;
 
-	// Only one statement in the sql, only one call to step
-	assert(strchr(sql_str, ';') == strrchr(sql_str, ';'));
+	if (sqlite3_prepare_v2(dbconn, sql, -1, &prep, NULL) != SQLITE_OK)
+		return NULL;
 
-	if (file == NULL)
-		prepare(&sql_prep, sql_str_all);
-	else {
-		prepare(&sql_prep, sql_str);
-
-		if (sqlite3_bind_text(sql_prep, 1, file, -1, SQLITE_STATIC) != SQLITE_OK)
-			return NULL;
+	if (sqlite3_bind_text(prep, 1, path, -1, SQLITE_TRANSIENT) != SQLITE_OK) {
+		sqlite3_finalize(prep);
+		prep = NULL;
 	}
 
-	return (step_t *) sql_prep;
+	return prep;
+}
+
+step_t *list_all_tags(void)
+{
+	static const char *sql = "SELECT DISTINCT name FROM tag;";
+	sqlite3_stmt *prep = NULL;
+
+	if (sqlite3_prepare_v2(dbconn, sql, -1, &prep, NULL) != SQLITE_OK)
+		return NULL;
+
+	return prep;
 }
 
 static void close_db(void)
@@ -562,7 +570,7 @@ static int main_list(int argc, char **argv)
 	assert(argv != NULL);
 
 	if (argc == 0)
-		step = list_by_file(NULL);
+		step = list_all_tags();
 	else if (argc == 1)
 		step = list_by_file(argv[0]);
 	else {
